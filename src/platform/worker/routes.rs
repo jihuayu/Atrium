@@ -4,13 +4,14 @@ use worker::{Request, Response, Result, RouteContext, Router};
 use crate::{
     auth::{bearer_from_header, resolve_user},
     fmt::{apply_comment_accept, apply_issue_accept, pagination::build_link_header, parse_accept},
+    markdown::render_markdown,
     services,
     types::{
-        CreateCommentInput, CreateIssueInput, CreateLabelInput, CreateReactionInput, ListCommentsQuery,
-        ListIssuesQuery, PaginationQuery, SearchIssuesQuery, SearchIssuesResponse, UpdateCommentInput,
-        UpdateIssueInput,
+        CreateCommentInput, CreateIssueInput, CreateLabelInput, CreateReactionInput,
+        ListCommentsQuery, ListIssuesQuery, PaginationQuery, RenderMarkdownInput,
+        SearchIssuesQuery, SearchIssuesResponse, UpdateCommentInput, UpdateIssueInput,
     },
-    AppContext, ApiError,
+    ApiError, AppContext,
 };
 
 use super::{d1::D1Db, http::WorkerHttpClient};
@@ -96,12 +97,18 @@ pub fn router(state: WorkerState) -> Router<'static, WorkerState> {
         .get_async("/search/issues", |req, ctx| async move {
             to_worker_result(search_issues(req, ctx).await)
         })
+        .post_async("/markdown", |req, ctx| async move {
+            to_worker_result(render_markdown_handler(req, ctx).await)
+        })
         .get_async("/user", |req, ctx| async move {
             to_worker_result(get_current_user(req, ctx).await)
         })
 }
 
-async fn get_current_user(req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn get_current_user(
+    req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let db = d1_db(&route)?;
     let http = WorkerHttpClient;
     let user = resolve_request_user(&req, &db, &http, route.data.token_cache_ttl).await?;
@@ -131,8 +138,12 @@ async fn list_issues(req: Request, route: RouteContext<WorkerState>) -> crate::R
     let accept = parse_accept(header_value(&req, "Accept").as_deref());
     let ctx = app_context(&route, user.as_ref(), &db, &http);
 
-    let (items, total, page, per_page) = services::issue::list_issues(&ctx, &owner, &repo, &query).await?;
-    let items: Vec<_> = items.into_iter().map(|v| apply_issue_accept(v, accept)).collect();
+    let (items, total, page, per_page) =
+        services::issue::list_issues(&ctx, &owner, &repo, &query).await?;
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|v| apply_issue_accept(v, accept))
+        .collect();
     let link = build_link_header(
         &route.data.base_url,
         &format!("/repos/{}/{}/issues", owner, repo),
@@ -144,7 +155,10 @@ async fn list_issues(req: Request, route: RouteContext<WorkerState>) -> crate::R
     json_response(200, &items, link)
 }
 
-async fn create_issue(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn create_issue(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let input = req
@@ -177,7 +191,10 @@ async fn get_issue(req: Request, route: RouteContext<WorkerState>) -> crate::Res
     json_response(200, &apply_issue_accept(issue, accept), None)
 }
 
-async fn update_issue(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn update_issue(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let number = param_i64(&route, "number")?;
@@ -200,11 +217,13 @@ async fn list_comments(req: Request, route: RouteContext<WorkerState>) -> crate:
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let number = param_i64(&route, "number")?;
-    let query = req.query::<ListCommentsQuery>().unwrap_or(ListCommentsQuery {
-        per_page: None,
-        page: None,
-        since: None,
-    });
+    let query = req
+        .query::<ListCommentsQuery>()
+        .unwrap_or(ListCommentsQuery {
+            per_page: None,
+            page: None,
+            since: None,
+        });
 
     let db = d1_db(&route)?;
     let http = WorkerHttpClient;
@@ -214,7 +233,10 @@ async fn list_comments(req: Request, route: RouteContext<WorkerState>) -> crate:
 
     let (items, total, page, per_page) =
         services::comment::list_comments(&ctx, &owner, &repo, number, &query).await?;
-    let items: Vec<_> = items.into_iter().map(|v| apply_comment_accept(v, accept)).collect();
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|v| apply_comment_accept(v, accept))
+        .collect();
     let link = build_link_header(
         &route.data.base_url,
         &format!("/repos/{}/{}/issues/{}/comments", owner, repo, number),
@@ -226,7 +248,10 @@ async fn list_comments(req: Request, route: RouteContext<WorkerState>) -> crate:
     json_response(200, &items, link)
 }
 
-async fn create_comment(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn create_comment(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let number = param_i64(&route, "number")?;
@@ -260,7 +285,10 @@ async fn get_comment(req: Request, route: RouteContext<WorkerState>) -> crate::R
     json_response(200, &apply_comment_accept(comment, accept), None)
 }
 
-async fn update_comment(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn update_comment(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let id = param_i64(&route, "id")?;
@@ -307,8 +335,15 @@ async fn list_reactions(req: Request, route: RouteContext<WorkerState>) -> crate
     let user = resolve_request_user(&req, &db, &http, route.data.token_cache_ttl).await?;
     let ctx = app_context(&route, user.as_ref(), &db, &http);
 
-    let (items, total, page, per_page) =
-        services::reaction::list_reactions(&ctx, &owner, &repo, id, pagination.page, pagination.per_page).await?;
+    let (items, total, page, per_page) = services::reaction::list_reactions(
+        &ctx,
+        &owner,
+        &repo,
+        id,
+        pagination.page,
+        pagination.per_page,
+    )
+    .await?;
     let link = build_link_header(
         &route.data.base_url,
         &format!("/repos/{}/{}/issues/comments/{}/reactions", owner, repo, id),
@@ -320,7 +355,10 @@ async fn list_reactions(req: Request, route: RouteContext<WorkerState>) -> crate
     json_response(200, &items, link)
 }
 
-async fn create_reaction(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn create_reaction(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let id = param_i64(&route, "id")?;
@@ -334,12 +372,16 @@ async fn create_reaction(mut req: Request, route: RouteContext<WorkerState>) -> 
     let user = resolve_request_user(&req, &db, &http, route.data.token_cache_ttl).await?;
     let ctx = app_context(&route, user.as_ref(), &db, &http);
 
-    let (reaction, created) = services::reaction::create_reaction(&ctx, &owner, &repo, id, &input).await?;
+    let (reaction, created) =
+        services::reaction::create_reaction(&ctx, &owner, &repo, id, &input).await?;
     let status = if created { 201 } else { 200 };
     json_response(status, &reaction, None)
 }
 
-async fn delete_reaction(req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn delete_reaction(
+    req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let id = param_i64(&route, "id")?;
@@ -366,13 +408,22 @@ async fn search_issues(req: Request, route: RouteContext<WorkerState>) -> crate:
     let ctx = app_context(&route, user.as_ref(), &db, &http);
 
     let (items, total, page, per_page) = services::search::search_issues(&ctx, &query).await?;
-    let items = items.into_iter().map(|v| apply_issue_accept(v, accept)).collect();
+    let items = items
+        .into_iter()
+        .map(|v| apply_issue_accept(v, accept))
+        .collect();
     let response = SearchIssuesResponse {
         total_count: total,
         incomplete_results: false,
         items,
     };
-    let link = build_link_header(&route.data.base_url, "/search/issues", page, per_page, total);
+    let link = build_link_header(
+        &route.data.base_url,
+        "/search/issues",
+        page,
+        per_page,
+        total,
+    );
 
     json_response(200, &response, link)
 }
@@ -390,7 +441,10 @@ async fn list_labels(req: Request, route: RouteContext<WorkerState>) -> crate::R
     json_response(200, &labels, None)
 }
 
-async fn create_label(mut req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+async fn create_label(
+    mut req: Request,
+    route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
     let owner = param_required(&route, "owner")?;
     let repo = param_required(&route, "repo")?;
     let input = req
@@ -405,6 +459,18 @@ async fn create_label(mut req: Request, route: RouteContext<WorkerState>) -> cra
 
     let label = services::label::create_label(&ctx, &owner, &repo, &input).await?;
     json_response(201, &label, None)
+}
+
+async fn render_markdown_handler(
+    mut req: Request,
+    _route: RouteContext<WorkerState>,
+) -> crate::Result<Response> {
+    let input = req
+        .json::<RenderMarkdownInput>()
+        .await
+        .map_err(|_| ApiError::bad_request("Invalid request body"))?;
+    let _ = (&input.mode, &input.context);
+    html_response(200, &render_markdown(&input.text))
 }
 
 fn d1_db(route: &RouteContext<WorkerState>) -> crate::Result<D1Db> {
@@ -460,7 +526,11 @@ fn header_value(req: &Request, name: &str) -> Option<String> {
     req.headers().get(name).ok().flatten()
 }
 
-fn json_response<T: Serialize>(status: u16, payload: &T, link: Option<String>) -> crate::Result<Response> {
+fn json_response<T: Serialize>(
+    status: u16,
+    payload: &T,
+    link: Option<String>,
+) -> crate::Result<Response> {
     let mut response = Response::from_json(payload)
         .map_err(|e| ApiError::internal(format!("response serialize failed: {}", e)))?
         .with_status(status);
@@ -472,6 +542,17 @@ fn json_response<T: Serialize>(status: u16, payload: &T, link: Option<String>) -
             .map_err(|e| ApiError::internal(format!("set Link header failed: {}", e)))?;
     }
 
+    Ok(response)
+}
+
+fn html_response(status: u16, payload: &str) -> crate::Result<Response> {
+    let mut response = Response::ok(payload)
+        .map_err(|e| ApiError::internal(format!("response build failed: {}", e)))?
+        .with_status(status);
+    response
+        .headers_mut()
+        .set("Content-Type", "text/html; charset=utf-8")
+        .map_err(|e| ApiError::internal(format!("set Content-Type header failed: {}", e)))?;
     Ok(response)
 }
 

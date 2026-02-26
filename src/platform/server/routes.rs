@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 
@@ -11,11 +11,11 @@ use crate::{
     fmt::{apply_comment_accept, apply_issue_accept, pagination::build_link_header, parse_accept},
     services,
     types::{
-        CreateCommentInput, CreateIssueInput, CreateLabelInput, CreateReactionInput, ListCommentsQuery,
-        ListIssuesQuery, PaginationQuery, SearchIssuesQuery, SearchIssuesResponse, UpdateCommentInput,
-        UpdateIssueInput,
+        CreateCommentInput, CreateIssueInput, CreateLabelInput, CreateReactionInput,
+        ListCommentsQuery, ListIssuesQuery, PaginationQuery, RenderMarkdownInput,
+        SearchIssuesQuery, SearchIssuesResponse, UpdateCommentInput, UpdateIssueInput,
     },
-    AppContext, ApiError,
+    ApiError, AppContext,
 };
 
 use super::AppState;
@@ -32,7 +32,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/repos/{owner}/{repo}/issues/comments/{id}",
-            get(get_comment).patch(update_comment).delete(delete_comment),
+            get(get_comment)
+                .patch(update_comment)
+                .delete(delete_comment),
         )
         .route(
             "/repos/{owner}/{repo}/issues/{number}/comments",
@@ -51,6 +53,7 @@ pub fn router(state: AppState) -> Router {
             get(list_labels).post(create_label),
         )
         .route("/search/issues", get(search_issues))
+        .route("/markdown", post(render_markdown))
         .with_state(state)
 }
 
@@ -64,8 +67,12 @@ async fn list_issues(
     let accept = parse_accept(header_value(&headers, header::ACCEPT));
     let ctx = app_context(&state, user.as_ref());
 
-    let (items, total, page, per_page) = services::issue::list_issues(&ctx, &owner, &repo, &query).await?;
-    let items: Vec<_> = items.into_iter().map(|v| apply_issue_accept(v, accept)).collect();
+    let (items, total, page, per_page) =
+        services::issue::list_issues(&ctx, &owner, &repo, &query).await?;
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|v| apply_issue_accept(v, accept))
+        .collect();
 
     let mut response = Json(items).into_response();
     if let Some(link) = build_link_header(
@@ -132,7 +139,8 @@ async fn list_comments(
     let accept = parse_accept(header_value(&headers, header::ACCEPT));
     let ctx = app_context(&state, user.as_ref());
 
-    let (items, total, page, per_page) = services::comment::list_comments(&ctx, &owner, &repo, number, &query).await?;
+    let (items, total, page, per_page) =
+        services::comment::list_comments(&ctx, &owner, &repo, number, &query).await?;
     let items: Vec<_> = items
         .into_iter()
         .map(|v| apply_comment_accept(v, accept))
@@ -163,7 +171,11 @@ async fn create_comment(
     let ctx = app_context(&state, user.as_ref());
 
     let comment = services::comment::create_comment(&ctx, &owner, &repo, number, &input).await?;
-    Ok((StatusCode::CREATED, Json(apply_comment_accept(comment, accept))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(apply_comment_accept(comment, accept)),
+    )
+        .into_response())
 }
 
 async fn get_comment(
@@ -246,8 +258,13 @@ async fn create_reaction(
     let user = resolve_request_user(&state, &headers).await?;
     let ctx = app_context(&state, user.as_ref());
 
-    let (reaction, created) = services::reaction::create_reaction(&ctx, &owner, &repo, id, &input).await?;
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
+    let (reaction, created) =
+        services::reaction::create_reaction(&ctx, &owner, &repo, id, &input).await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
     Ok((status, Json(reaction)).into_response())
 }
 
@@ -285,7 +302,8 @@ async fn search_issues(
     })
     .into_response();
 
-    if let Some(link) = build_link_header(&state.base_url, "/search/issues", page, per_page, total) {
+    if let Some(link) = build_link_header(&state.base_url, "/search/issues", page, per_page, total)
+    {
         set_link_header(&mut response, &link);
     }
 
@@ -317,20 +335,43 @@ async fn create_label(
     Ok((StatusCode::CREATED, Json(label)).into_response())
 }
 
-async fn resolve_request_user(state: &AppState, headers: &HeaderMap) -> Result<Option<crate::types::GitHubUser>, ApiError> {
+async fn render_markdown(Json(input): Json<RenderMarkdownInput>) -> Result<Response, ApiError> {
+    let _ = (&input.mode, &input.context);
+    let rendered = crate::markdown::render_markdown(&input.text);
+    let mut response = (StatusCode::OK, rendered).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    Ok(response)
+}
+
+async fn resolve_request_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<crate::types::GitHubUser>, ApiError> {
     let raw_header = header_value(headers, header::AUTHORIZATION);
     let token = bearer_from_header(raw_header)?;
 
     match token {
         None => Ok(None),
         Some(token) => {
-            let user = resolve_user(state.db.as_ref(), state.http.as_ref(), &token, state.token_cache_ttl).await?;
+            let user = resolve_user(
+                state.db.as_ref(),
+                state.http.as_ref(),
+                &token,
+                state.token_cache_ttl,
+            )
+            .await?;
             Ok(Some(user))
         }
     }
 }
 
-fn app_context<'a>(state: &'a AppState, user: Option<&'a crate::types::GitHubUser>) -> AppContext<'a> {
+fn app_context<'a>(
+    state: &'a AppState,
+    user: Option<&'a crate::types::GitHubUser>,
+) -> AppContext<'a> {
     AppContext {
         db: state.db.as_ref(),
         http: state.http.as_ref(),

@@ -152,6 +152,13 @@ pub struct CreateReactionInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RenderMarkdownInput {
+    pub text: String,
+    pub mode: Option<String>,
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct CreateLabelInput {
     pub name: String,
     pub color: Option<String>,

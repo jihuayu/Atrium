@@ -1,5 +1,15 @@
 # xtalk - GitHub Issues API 兼容评论系统后端
 
+## 变更记录
+
+| 版本 | 变更内容 | 影响文件 |
+|------|---------|---------|
+| v0.3 | 新增共享路由层：`router.rs` + `handlers/` 目录，两端共用路由和 handler 逻辑；平台层（`platform/worker/`、`platform/server/`）瘦身为纯类型适配器，删除各自的 `routes.rs`；新增 `matchit`、`bytes` 依赖 | `src/router.rs`（新增）、`src/handlers/`（新增）、`platform/worker/mod.rs`、`platform/server/mod.rs`、`Cargo.toml` |
+| v0.2 | `users` 表新增 `email` 字段；`comments` 表将 8 个 reaction 整数列合并为单个 `reactions TEXT`（JSON），创建/删除 reaction 时在 Rust 侧读写 JSON 而非 SQL 算术更新 | `migrations/0001_initial_schema.sql`、`src/services/reaction.rs`、`src/auth.rs` |
+| v0.1 | 初始设计：单 crate + feature flags（`worker`/`server`）、Database/HttpClient trait、D1/SQLite 双实现、LRU 评论缓存（server 专属）、完整 Schema 和 API 端点 | 全部文件 |
+
+---
+
 ## 1. 概述
 
 xtalk 是一个用 Rust 编写的后端服务，提供与 GitHub Issues REST API 兼容的接口，旨在替代基于 GitHub Issues 的评论系统（Gitalk、Utterances 等）。现有前端**无需修改**，只需将 API 基地址指向 xtalk 即可完成切换。
@@ -76,6 +86,16 @@ xtalk/
 │   ├── auth.rs                         # token 解析、哈希、HttpClient trait
 │   ├── markdown.rs                     # pulldown-cmark 封装
 │   │
+│   ├── router.rs                       # AppRequest / AppResponse + 路由分发（matchit）
+│   │
+│   ├── handlers/                       # 路由处理逻辑（两端共用，取代 platform/*/routes.rs）
+│   │   ├── mod.rs
+│   │   ├── issues.rs
+│   │   ├── comments.rs
+│   │   ├── reactions.rs
+│   │   ├── labels.rs
+│   │   └── search.rs
+│   │
 │   ├── services/                       # 纯业务逻辑，依赖 db trait
 │   │   ├── mod.rs
 │   │   ├── repo.rs                     # 仓库自动创建
@@ -92,19 +112,18 @@ xtalk/
 │   │   ├── user.rs
 │   │   └── pagination.rs              # Link header 构建
 │   │
-│   │  ── 平台层 (feature-gated) ──
+│   │  ── 平台层 (feature-gated，仅做适配) ──
 │   ├── platform/
 │   │   ├── mod.rs                      # cfg 分发
 │   │   ├── worker/                     # #[cfg(feature = "worker")]
-│   │   │   ├── mod.rs                  # #[event(fetch)] 入口 + Router
+│   │   │   ├── mod.rs                  # #[event(fetch)]：worker::Request → AppRequest → worker::Response
 │   │   │   ├── d1.rs                   # Database trait 的 D1 实现
-│   │   │   ├── http.rs                 # HttpClient trait 的 worker::Fetch 实现
-│   │   │   └── routes.rs              # 路由注册（调用 services）
+│   │   │   └── http.rs                 # HttpClient trait 的 worker::Fetch 实现
 │   │   └── server/                     # #[cfg(feature = "server")]
-│   │       ├── mod.rs                  # axum App 构建
+│   │       ├── mod.rs                  # axum 单一 catch-all handler → AppRequest → axum Response
 │   │       ├── sqlite.rs              # Database trait 的 sqlx::SqlitePool 实现
 │   │       ├── http.rs                 # HttpClient trait 的 reqwest 实现
-│   │       └── routes.rs              # axum 路由注册（调用 services）
+│   │       └── cache.rs               # LRU 评论缓存（moka）
 │   │
 │   └── bin/
 │       └── server.rs                   # server feature 的 main()
@@ -137,7 +156,7 @@ required-features = ["server"]
 [features]
 default = []
 worker = ["dep:worker"]
-server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:reqwest", "dep:tower-http"]
+server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:reqwest", "dep:tower-http", "dep:moka"]
 
 [dependencies]
 # ── 共享（始终编译）──
@@ -158,6 +177,7 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"], optional = tru
 tokio = { version = "1", features = ["full"], optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tower-http = { version = "0.6", features = ["cors"], optional = true }
+moka = { version = "0.12", features = ["future"], optional = true }
 ```
 
 ## 5. 核心抽象层
@@ -241,6 +261,202 @@ pub async fn create_issue(
     let user = ctx.user.ok_or(ApiError::unauthorized())?;
     // ... 业务逻辑，调用 ctx.db
 }
+```
+
+### 5.4 共享路由层（router.rs）
+
+这是新增的关键抽象——在 `xtalk-core` 中定义一个平台无关的路由器，让 worker 和 server 共用所有路由和 handler 逻辑。
+
+#### 数据结构
+
+```rust
+// src/router.rs
+use std::collections::HashMap;
+
+/// 平台无关的请求表示
+pub struct AppRequest {
+    pub method: String,                      // "GET" / "POST" / "PATCH" / "DELETE"
+    pub path: String,                        // 原始路径，如 "/repos/user/blog/issues/1"
+    pub path_params: HashMap<String, String>, // 由路由器匹配后填充
+    pub query: HashMap<String, String>,      // 查询参数
+    pub auth_header: Option<String>,         // Authorization 头原文
+    pub accept: Option<String>,              // Accept 头
+    pub body: bytes::Bytes,                  // 请求体
+}
+
+/// 平台无关的响应表示
+pub struct AppResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,      // (name, value)
+    pub body: bytes::Bytes,
+}
+
+impl AppResponse {
+    pub fn json<T: serde::Serialize>(status: u16, value: &T) -> Self { ... }
+    pub fn no_content() -> Self { /* 204 */ }
+    pub fn with_header(mut self, k: &str, v: &str) -> Self { ... }
+}
+```
+
+#### 路由表
+
+```rust
+// src/router.rs
+
+use matchit::Router as Matchit;
+
+/// 路由名称枚举，matchit 存储此值作为路由标识
+#[derive(Clone)]
+enum Route {
+    ListIssues, CreateIssue, GetIssue, UpdateIssue, DeleteIssue,
+    ListComments, CreateComment, GetComment, UpdateComment, DeleteComment,
+    ListReactions, CreateReaction, DeleteReaction,
+    ListLabels, CreateLabel,
+    SearchIssues,
+}
+
+pub struct Router {
+    get:    Matchit<Route>,
+    post:   Matchit<Route>,
+    patch:  Matchit<Route>,
+    delete: Matchit<Route>,
+}
+
+impl Router {
+    pub fn new() -> Self {
+        let mut r = Self { ... };
+
+        // 注意：含字面量 "comments" 的路由必须先于 ":number" 注册
+        r.get.insert("/repos/:owner/:repo/issues/comments/:id", Route::GetComment).unwrap();
+        r.get.insert("/repos/:owner/:repo/issues/:number/comments", Route::ListComments).unwrap();
+        r.get.insert("/repos/:owner/:repo/issues/:number", Route::GetIssue).unwrap();
+        r.get.insert("/repos/:owner/:repo/issues", Route::ListIssues).unwrap();
+        r.get.insert("/repos/:owner/:repo/issues/comments/:id/reactions", Route::ListReactions).unwrap();
+        r.get.insert("/repos/:owner/:repo/labels", Route::ListLabels).unwrap();
+        r.get.insert("/search/issues", Route::SearchIssues).unwrap();
+
+        r.post.insert("/repos/:owner/:repo/issues", Route::CreateIssue).unwrap();
+        r.post.insert("/repos/:owner/:repo/issues/:number/comments", Route::CreateComment).unwrap();
+        r.post.insert("/repos/:owner/:repo/issues/comments/:id/reactions", Route::CreateReaction).unwrap();
+        r.post.insert("/repos/:owner/:repo/labels", Route::CreateLabel).unwrap();
+
+        r.patch.insert("/repos/:owner/:repo/issues/:number", Route::UpdateIssue).unwrap();
+        r.patch.insert("/repos/:owner/:repo/issues/comments/:id", Route::UpdateComment).unwrap();
+
+        r.delete.insert("/repos/:owner/:repo/issues/:number", Route::DeleteIssue).unwrap();
+        r.delete.insert("/repos/:owner/:repo/issues/comments/:id", Route::DeleteComment).unwrap();
+        r.delete.insert("/repos/:owner/:repo/issues/comments/:id/reactions/:rid", Route::DeleteReaction).unwrap();
+
+        r
+    }
+}
+```
+
+#### 分发入口
+
+```rust
+// src/router.rs
+
+impl Router {
+    pub async fn handle(&self, mut req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
+        let table = match req.method.as_str() {
+            "GET"    => &self.get,
+            "POST"   => &self.post,
+            "PATCH"  => &self.patch,
+            "DELETE" => &self.delete,
+            "OPTIONS" => return AppResponse::no_content().with_header("Allow", "GET,POST,PATCH,DELETE"),
+            _ => return AppResponse::json(405, &json!({"message": "Method Not Allowed"})),
+        };
+
+        let matched = match table.at(&req.path) {
+            Ok(m) => m,
+            Err(_) => return AppResponse::json(404, &json!({"message": "Not Found"})),
+        };
+
+        // 将路径参数填入请求
+        req.path_params = matched.params.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        // 分发到对应 handler
+        match matched.value {
+            Route::ListIssues     => handlers::issues::list(req, ctx).await,
+            Route::CreateIssue    => handlers::issues::create(req, ctx).await,
+            Route::GetIssue       => handlers::issues::get(req, ctx).await,
+            Route::UpdateIssue    => handlers::issues::update(req, ctx).await,
+            Route::DeleteIssue    => handlers::issues::delete(req, ctx).await,
+            Route::ListComments   => handlers::comments::list(req, ctx).await,
+            Route::CreateComment  => handlers::comments::create(req, ctx).await,
+            // ...
+        }
+    }
+}
+```
+
+#### 新增依赖
+
+```toml
+# 共享层，不属于任何 feature
+matchit = "0.8"
+bytes = "1"
+```
+
+#### 平台层变为纯适配器
+
+**Worker**（`platform/worker/mod.rs`）：
+
+```rust
+#[event(fetch)]
+async fn main(req: worker::Request, env: Env, _ctx: worker::Context) -> worker::Result<worker::Response> {
+    let app_req = to_app_request(req).await?;    // worker::Request → AppRequest
+    let db  = D1Database::new(env.d1("DB")?);
+    let http = WorkerHttpClient;
+    let user = auth::resolve_user(&db, &http, &app_req.auth_header, ...).await.ok().flatten();
+    let ctx = AppContext { db: &db, http: &http, base_url: &base_url, user: user.as_ref() };
+
+    let app_resp = ROUTER.handle(app_req, &ctx).await;
+
+    to_worker_response(app_resp)                 // AppResponse → worker::Response
+}
+```
+
+**Server**（`platform/server/mod.rs`）：
+
+```rust
+// axum 注册一个 catch-all，所有请求都走 Router::handle
+async fn handler(State(state): State<AppState>, req: axum::http::Request<Body>) -> impl IntoResponse {
+    let app_req = to_app_request(req).await;     // axum Request → AppRequest
+    let user = auth::resolve_user(...).await.ok().flatten();
+    let ctx = AppContext { db: &state.db, http: &state.http, base_url: &state.base_url, user: user.as_ref() };
+
+    let app_resp = state.router.handle(app_req, &ctx).await;
+
+    to_axum_response(app_resp)                   // AppResponse → axum Response
+}
+
+// axum 路由只有一条
+let app = axum::Router::new()
+    .fallback(handler)
+    .layer(CorsLayer::permissive())
+    .with_state(state);
+```
+
+### 5.5 层级职责总结
+
+```
+src/handlers/      ← 所有路由 handler（两端共用）
+   ↓ 调用
+src/services/      ← 业务逻辑（两端共用）
+   ↓ 依赖
+src/db.rs          ← Database trait（接口）
+   ↑ 实现
+platform/worker/d1.rs      (worker feature)
+platform/server/sqlite.rs  (server feature)
+
+src/router.rs      ← 路由表 + 分发（两端共用）
+   ↑ 调用
+platform/worker/mod.rs  → to_app_request / to_worker_response
+platform/server/mod.rs  → to_app_request / to_axum_response
 ```
 
 ## 6. 数据库 Schema
@@ -790,7 +1006,144 @@ XTALK_LISTEN=0.0.0.0:3000
 | 9 | Worker 平台 | `platform/worker/` |
 | 10 | 测试 & 集成验证 | 测试文件 |
 
-## 13. 验证方案
+## 13. Server 部署 LRU 缓存
+
+仅 `--features server` 编译时生效，Worker 部署不涉及（无持久进程内存）。
+
+### 缓存什么
+
+评论列表是读多写少的热点：每次页面加载都会拉取，但评论不会频繁变动。因此缓存两类数据：
+
+| 缓存项 | key | value |
+|--------|-----|-------|
+| 某 issue 的评论列表（分页） | `(issue_id, page, per_page)` | `(Vec<CommentRow>, total_count)` |
+| 单条评论 | `comment_id` | `CommentRow` |
+
+Issue 列表不缓存——它的过滤参数组合多、失效频繁，收益低。
+
+### 依赖
+
+```toml
+# server feature 专属
+moka = { version = "0.12", features = ["future"], optional = true }
+```
+
+`moka` 是异步原生的 LRU/TinyLFU 缓存库，支持按容量和 TTL 双重淘汰。
+
+### 数据结构
+
+```rust
+// src/platform/server/cache.rs
+
+use moka::future::Cache;
+
+#[derive(Clone)]
+pub struct CommentCache {
+    /// 评论列表缓存，key = (issue_id, page, per_page)
+    list: Cache<(i64, i64, i64), (Vec<CommentRow>, i64)>,
+    /// 单条评论缓存，key = comment_id
+    single: Cache<i64, CommentRow>,
+}
+
+impl CommentCache {
+    pub fn new(max_capacity: u64, ttl_secs: u64) -> Self {
+        let ttl = std::time::Duration::from_secs(ttl_secs);
+        Self {
+            list: Cache::builder()
+                .max_capacity(max_capacity)
+                .time_to_live(ttl)
+                .build(),
+            single: Cache::builder()
+                .max_capacity(max_capacity * 10)
+                .time_to_live(ttl)
+                .build(),
+        }
+    }
+
+    pub async fn get_list(&self, issue_id: i64, page: i64, per_page: i64)
+        -> Option<(Vec<CommentRow>, i64)>
+    {
+        self.list.get(&(issue_id, page, per_page)).await
+    }
+
+    pub async fn set_list(&self, issue_id: i64, page: i64, per_page: i64,
+        rows: Vec<CommentRow>, total: i64)
+    {
+        self.list.insert((issue_id, page, per_page), (rows, total)).await;
+    }
+
+    pub async fn get_single(&self, comment_id: i64) -> Option<CommentRow> {
+        self.single.get(&comment_id).await
+    }
+
+    pub async fn set_single(&self, comment: CommentRow) {
+        self.single.insert(comment.id, comment).await;
+    }
+
+    /// 某 issue 下有评论变动时，让该 issue 所有列表缓存失效
+    /// moka 不支持按前缀批量删除，用 invalidate_entries_if 按 issue_id 扫描
+    pub async fn invalidate_issue(&self, issue_id: i64) {
+        self.list
+            .invalidate_entries_if(move |k, _| k.0 == issue_id)
+            .await
+            .ok();
+    }
+
+    pub async fn invalidate_comment(&self, comment_id: i64) {
+        self.single.invalidate(&comment_id).await;
+    }
+}
+```
+
+### 挂载到 AppState
+
+```rust
+// src/platform/server/mod.rs
+
+pub struct AppState {
+    pub db: Arc<SqliteDatabase>,
+    pub http: Arc<ReqwestHttpClient>,
+    pub cache: CommentCache,
+    pub base_url: String,
+    pub token_cache_ttl: i64,
+}
+```
+
+### 缓存读写时机
+
+```
+GET …/issues/:n/comments
+  └─ 先查 cache.get_list(issue_id, page, per_page)
+       命中 → 直接返回
+       未命中 → 查 DB → cache.set_list(...) → 返回
+
+GET …/issues/comments/:id
+  └─ 先查 cache.get_single(comment_id)
+       命中 → 直接返回
+       未命中 → 查 DB → cache.set_single(...) → 返回
+
+POST  …/issues/:n/comments     （新建评论）
+PATCH …/issues/comments/:id    （编辑评论）
+DELETE …/issues/comments/:id   （删除评论）
+POST/DELETE …/comments/:id/reactions  （reaction 变动）
+  └─ 写入 DB → cache.invalidate_issue(issue_id)
+                + cache.invalidate_comment(comment_id)
+```
+
+### 配置（环境变量）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `XTALK_CACHE_MAX_ISSUES` | `256` | 最多缓存多少个 issue 的列表 |
+| `XTALK_CACHE_TTL` | `60` | 缓存 TTL（秒），到期自动失效 |
+
+TTL 兜底保证即使失效逻辑有疏漏，缓存最多 60 秒后也会自动过期。
+
+### Worker 部署对比
+
+Worker 是无状态的，每个请求都是独立的 isolate，没有进程内共享内存。如需缓存可使用 Cloudflare KV 或 Cache API，但这属于 Phase 2 范畴，当前 Worker 版直接走 D1。
+
+## 14. 验证方案
 
 ```bash
 # ── 容器版 ──
