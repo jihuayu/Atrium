@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
+use worker::{wasm_bindgen::JsValue, Fetch, Headers, Method, Request, RequestInit};
 
-use worker::{Fetch, Headers, Method, Request, RequestInit};
-
-use crate::{auth::HttpClient, error::ApiError, types::GitHubApiUser, Result};
+use crate::{
+    auth::{HttpClient, UpstreamResponse},
+    error::ApiError,
+    types::GitHubApiUser,
+    Result,
+};
 
 #[derive(Default)]
 pub struct WorkerHttpClient;
@@ -45,5 +51,76 @@ impl HttpClient for WorkerHttpClient {
             .json::<GitHubApiUser>()
             .await
             .map_err(|e| ApiError::internal(format!("decode github user failed: {}", e)))
+    }
+
+    async fn post_utterances_token(
+        &self,
+        body: &[u8],
+        headers: &HashMap<String, String>,
+    ) -> Result<UpstreamResponse> {
+        let payload =
+            std::str::from_utf8(body).map_err(|_| ApiError::bad_request("Invalid UTF-8 body"))?;
+
+        let request_headers = Headers::new();
+        request_headers
+            .set(
+                "Content-Type",
+                headers
+                    .get("content-type")
+                    .map(String::as_str)
+                    .unwrap_or("application/json"),
+            )
+            .map_err(|e| ApiError::internal(format!("set content-type header failed: {}", e)))?;
+
+        for (key, name) in [
+            ("referer", "Referer"),
+            ("origin", "Origin"),
+            ("user-agent", "User-Agent"),
+            ("cookie", "Cookie"),
+            ("sec-ch-ua", "Sec-CH-UA"),
+            ("sec-ch-ua-mobile", "Sec-CH-UA-Mobile"),
+            ("sec-ch-ua-platform", "Sec-CH-UA-Platform"),
+        ] {
+            if let Some(value) = headers.get(key) {
+                request_headers.set(name, value).map_err(|e| {
+                    ApiError::internal(format!("set {} header failed: {}", name, e))
+                })?;
+            }
+        }
+
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_headers(request_headers)
+            .with_body(Some(JsValue::from_str(payload)));
+
+        let request = Request::new_with_init("https://api.utteranc.es/token", &init)
+            .map_err(|e| ApiError::internal(format!("build request failed: {}", e)))?;
+        let mut response = Fetch::Request(request)
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("utterances token fetch failed: {}", e)))?;
+
+        let status = response.status_code();
+        let mut response_headers = Vec::new();
+        for name in [
+            "Content-Type",
+            "Cache-Control",
+            "X-Frame-Options",
+            "Content-Security-Policy",
+        ] {
+            if let Some(value) = response.headers().get(name).ok().flatten() {
+                response_headers.push((name.to_string(), value));
+            }
+        }
+
+        let body = response.bytes().await.map_err(|e| {
+            ApiError::internal(format!("read utterances token response failed: {}", e))
+        })?;
+
+        Ok(UpstreamResponse {
+            status,
+            headers: response_headers,
+            body: bytes::Bytes::from(body),
+        })
     }
 }

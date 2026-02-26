@@ -3,6 +3,7 @@ pub mod issues;
 pub mod labels;
 pub mod reactions;
 pub mod search;
+pub mod utterances;
 
 use serde::de::DeserializeOwned;
 
@@ -11,7 +12,7 @@ use crate::{
     markdown,
     router::{AppRequest, AppResponse},
     types::RenderMarkdownInput,
-    AppContext, ApiError,
+    ApiError, AppContext,
 };
 
 pub fn path_param(req: &AppRequest, name: &str) -> crate::Result<String> {
@@ -33,6 +34,10 @@ pub fn query_value(req: &AppRequest, key: &str) -> Option<String> {
 
 pub fn query_i64(req: &AppRequest, key: &str) -> Option<i64> {
     req.query.get(key).and_then(|v| v.parse::<i64>().ok())
+}
+
+pub fn header_value(req: &AppRequest, key: &str) -> Option<String> {
+    req.headers.get(&key.to_ascii_lowercase()).cloned()
 }
 
 pub fn body_json<T: DeserializeOwned>(req: &AppRequest) -> crate::Result<T> {

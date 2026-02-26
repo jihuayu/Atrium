@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use crate::{
-    auth::HttpClient,
+    auth::{HttpClient, UpstreamResponse},
     error::ApiError,
     types::{GitHubApiUser, GitHubUser},
     Result,
@@ -54,5 +56,65 @@ impl HttpClient for ReqwestHttpClient {
             .json::<GitHubApiUser>()
             .await
             .map_err(|e| ApiError::internal(format!("decode github user failed: {}", e)))
+    }
+
+    async fn post_utterances_token(
+        &self,
+        body: &[u8],
+        headers: &HashMap<String, String>,
+    ) -> Result<UpstreamResponse> {
+        let mut request = self
+            .client
+            .post("https://api.utteranc.es/token")
+            .body(body.to_vec())
+            .header(
+                "Content-Type",
+                headers
+                    .get("content-type")
+                    .map(String::as_str)
+                    .unwrap_or("application/json"),
+            );
+
+        for (key, name) in [
+            ("referer", "Referer"),
+            ("origin", "Origin"),
+            ("user-agent", "User-Agent"),
+            ("cookie", "Cookie"),
+            ("sec-ch-ua", "Sec-CH-UA"),
+            ("sec-ch-ua-mobile", "Sec-CH-UA-Mobile"),
+            ("sec-ch-ua-platform", "Sec-CH-UA-Platform"),
+        ] {
+            if let Some(value) = headers.get(key) {
+                request = request.header(name, value);
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("utterances token request failed: {}", e)))?;
+
+        let status = response.status().as_u16();
+        let mut response_headers = Vec::new();
+        for (key, name) in [
+            ("Content-Type", "Content-Type"),
+            ("Cache-Control", "Cache-Control"),
+            ("X-Frame-Options", "X-Frame-Options"),
+            ("Content-Security-Policy", "Content-Security-Policy"),
+        ] {
+            if let Some(value) = response.headers().get(key).and_then(|v| v.to_str().ok()) {
+                response_headers.push((name.to_string(), value.to_string()));
+            }
+        }
+
+        let body = response.bytes().await.map_err(|e| {
+            ApiError::internal(format!("read utterances token response failed: {}", e))
+        })?;
+
+        Ok(UpstreamResponse {
+            status,
+            headers: response_headers,
+            body,
+        })
     }
 }

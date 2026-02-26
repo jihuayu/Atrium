@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use serde::Serialize;
 
-use crate::{handlers, AppContext, ApiError};
+use crate::{handlers, ApiError, AppContext};
 
 pub struct AppRequest {
     pub method: String,
     pub path: String,
     pub path_params: HashMap<String, String>,
     pub query: HashMap<String, String>,
+    pub headers: HashMap<String, String>,
     pub auth_header: Option<String>,
     pub accept: Option<String>,
     pub body: Bytes,
@@ -69,6 +70,7 @@ enum Route {
     CreateLabel,
     SearchIssues,
     RenderMarkdown,
+    ProxyUtterancesToken,
     GetCurrentUser,
 }
 
@@ -96,7 +98,10 @@ impl AppRouter {
 
         router
             .get
-            .insert("/repos/:owner/:repo/issues/comments/:id/reactions", Route::ListReactions)
+            .insert(
+                "/repos/:owner/:repo/issues/comments/:id/reactions",
+                Route::ListReactions,
+            )
             .unwrap();
         router
             .get
@@ -104,7 +109,10 @@ impl AppRouter {
             .unwrap();
         router
             .get
-            .insert("/repos/:owner/:repo/issues/:number/comments", Route::ListComments)
+            .insert(
+                "/repos/:owner/:repo/issues/:number/comments",
+                Route::ListComments,
+            )
             .unwrap();
         router
             .get
@@ -126,11 +134,17 @@ impl AppRouter {
 
         router
             .post
-            .insert("/repos/:owner/:repo/issues/comments/:id/reactions", Route::CreateReaction)
+            .insert(
+                "/repos/:owner/:repo/issues/comments/:id/reactions",
+                Route::CreateReaction,
+            )
             .unwrap();
         router
             .post
-            .insert("/repos/:owner/:repo/issues/:number/comments", Route::CreateComment)
+            .insert(
+                "/repos/:owner/:repo/issues/:number/comments",
+                Route::CreateComment,
+            )
             .unwrap();
         router
             .post
@@ -144,10 +158,21 @@ impl AppRouter {
             .post
             .insert("/markdown", Route::RenderMarkdown)
             .unwrap();
+        router
+            .post
+            .insert("/api/utterances/token", Route::ProxyUtterancesToken)
+            .unwrap();
+        router
+            .post
+            .insert("/token", Route::ProxyUtterancesToken)
+            .unwrap();
 
         router
             .patch
-            .insert("/repos/:owner/:repo/issues/comments/:id", Route::UpdateComment)
+            .insert(
+                "/repos/:owner/:repo/issues/comments/:id",
+                Route::UpdateComment,
+            )
             .unwrap();
         router
             .patch
@@ -163,7 +188,10 @@ impl AppRouter {
             .unwrap();
         router
             .delete
-            .insert("/repos/:owner/:repo/issues/comments/:id", Route::DeleteComment)
+            .insert(
+                "/repos/:owner/:repo/issues/comments/:id",
+                Route::DeleteComment,
+            )
             .unwrap();
 
         router
@@ -176,7 +204,8 @@ impl AppRouter {
             "PATCH" => &self.patch,
             "DELETE" => &self.delete,
             "OPTIONS" => {
-                return AppResponse::no_content().with_header("Allow", "GET,POST,PATCH,DELETE,OPTIONS")
+                return AppResponse::no_content()
+                    .with_header("Allow", "GET,POST,PATCH,DELETE,OPTIONS")
             }
             _ => {
                 return AppResponse::json(
@@ -188,9 +217,7 @@ impl AppRouter {
 
         let matched = match table.at(&req.path) {
             Ok(matched) => matched,
-            Err(_) => {
-                return AppResponse::json(404, &serde_json::json!({"message": "Not Found"}))
-            }
+            Err(_) => return AppResponse::json(404, &serde_json::json!({"message": "Not Found"})),
         };
 
         req.path_params = matched
@@ -216,6 +243,7 @@ impl AppRouter {
             Route::CreateLabel => handlers::labels::create(req, ctx).await,
             Route::SearchIssues => handlers::search::search(req, ctx).await,
             Route::RenderMarkdown => handlers::render_markdown(req, ctx).await,
+            Route::ProxyUtterancesToken => handlers::utterances::proxy_token(req, ctx).await,
             Route::GetCurrentUser => handlers::current_user(req, ctx).await,
         }
     }

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::{
     db::{self, Database, DbValue},
@@ -13,6 +15,17 @@ use crate::{
 #[cfg_attr(not(feature = "worker"), async_trait)]
 pub trait HttpClient: Send + Sync {
     async fn get_github_user(&self, token: &str) -> Result<GitHubApiUser>;
+    async fn post_utterances_token(
+        &self,
+        body: &[u8],
+        headers: &HashMap<String, String>,
+    ) -> Result<UpstreamResponse>;
+}
+
+pub struct UpstreamResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Bytes,
 }
 
 pub fn parse_token(header: &str) -> Option<&str> {
@@ -66,12 +79,12 @@ pub async fn resolve_user(
 
     if let Some(cached) = db::query_opt::<CachedUser>(
         db,
-            "SELECT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin \
+        "SELECT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin \
              FROM token_cache tc \
              JOIN users u ON tc.user_id = u.id \
              WHERE tc.token_hash = ?1 AND tc.expires_at > datetime('now')",
-            &[DbValue::Text(token_hash.clone())],
-        )
+        &[DbValue::Text(token_hash.clone())],
+    )
     .await?
     {
         return Ok(cached.into());

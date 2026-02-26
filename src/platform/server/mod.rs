@@ -17,7 +17,7 @@ use crate::{
     auth::{bearer_from_header, resolve_user},
     router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     types::GitHubUser,
-    AppContext, ApiError, Result,
+    ApiError, AppContext, Result,
 };
 
 use self::{cache::CommentCache, http::ReqwestHttpClient, sqlite::SqliteDatabase};
@@ -71,6 +71,16 @@ async fn dispatch(State(state): State<AppState>, req: HttpRequest<Body>) -> Resp
 
 async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Response> {
     let (parts, body) = req.into_parts();
+    let headers = parts
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_ascii_lowercase(), v.to_string()))
+        })
+        .collect();
     let body = to_bytes(body, 8 * 1024 * 1024)
         .await
         .map_err(|e| ApiError::internal(format!("read request body failed: {}", e)))?;
@@ -83,6 +93,7 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         path: parts.uri.path().to_string(),
         path_params: std::collections::HashMap::new(),
         query: parse_query_string(parts.uri.query()),
+        headers,
         auth_header,
         accept,
         body,
@@ -101,7 +112,10 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
     Ok(to_axum_response(app_response))
 }
 
-async fn resolve_request_user(auth_header: Option<&str>, state: &AppState) -> Result<Option<GitHubUser>> {
+async fn resolve_request_user(
+    auth_header: Option<&str>,
+    state: &AppState,
+) -> Result<Option<GitHubUser>> {
     let token = bearer_from_header(auth_header)?;
     match token {
         None => Ok(None),

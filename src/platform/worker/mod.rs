@@ -104,22 +104,24 @@ async fn to_app_request(req: Request) -> crate::Result<AppRequest> {
             .map_err(|e| crate::ApiError::internal(format!("parse request url failed: {}", e)))?
             .query(),
     );
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .ok()
-        .flatten();
+    let auth_header = req.headers().get("Authorization").ok().flatten();
     let accept = req.headers().get("Accept").ok().flatten();
     let body = req
         .bytes()
         .await
         .map_err(|e| crate::ApiError::internal(format!("read request body failed: {}", e)))?;
+    let headers = req
+        .headers()
+        .entries()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value))
+        .collect();
 
     Ok(AppRequest {
         method,
         path,
         path_params: std::collections::HashMap::new(),
         query,
+        headers,
         auth_header,
         accept,
         body: bytes::Bytes::from(body),
@@ -144,8 +146,14 @@ fn to_worker_response(app: AppResponse) -> Result<Response> {
 fn add_cors(mut response: Response) -> Result<Response> {
     let h = response.headers_mut();
     h.set("Access-Control-Allow-Origin", "*")?;
-    h.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")?;
-    h.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")?;
+    h.set(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PATCH, DELETE, OPTIONS",
+    )?;
+    h.set(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, Accept",
+    )?;
     h.set("Access-Control-Expose-Headers", "Link")?;
     Ok(response)
 }
