@@ -129,6 +129,11 @@ fn parse_query(q: &str) -> ParsedQuery {
     let mut text = Vec::new();
 
     for token in q.split_whitespace() {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+
         if let Some(value) = token.strip_prefix("repo:") {
             if let Some((owner, repo)) = value.split_once('/') {
                 parsed.repo_owner = Some(owner.to_string());
@@ -143,19 +148,41 @@ fn parse_query(q: &str) -> ParsedQuery {
         if let Some(value) = token.strip_prefix("is:") {
             if value == "open" || value == "closed" {
                 parsed.state = Some(value.to_string());
-                continue;
             }
+            continue;
         }
-        text.push(token.to_string());
+
+        if token.starts_with("type:") || token.starts_with("in:") {
+            continue;
+        }
+
+        if looks_like_qualifier(token) {
+            continue;
+        }
+
+        let cleaned = token.trim_matches('"').trim_matches('\'');
+        if !cleaned.is_empty() {
+            text.push(cleaned.to_string());
+        }
     }
 
     parsed.text = text.join(" ");
     parsed
 }
 
+fn looks_like_qualifier(token: &str) -> bool {
+    let Some((name, value)) = token.split_once(':') else {
+        return false;
+    };
+    if value.is_empty() || value.starts_with("//") {
+        return false;
+    }
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_query;
+    use super::{looks_like_qualifier, parse_query};
 
     #[test]
     fn parse_qualifiers_and_text() {
@@ -165,5 +192,24 @@ mod tests {
         assert_eq!(parsed.label.as_deref(), Some("bug"));
         assert_eq!(parsed.state.as_deref(), Some("open"));
         assert_eq!(parsed.text, "hello world");
+    }
+
+    #[test]
+    fn ignores_unsupported_github_qualifiers() {
+        let parsed = parse_query(
+            r#"repo:user/blog type:issue in:title is:issue sort:updated-desc "hello world""#,
+        );
+        assert_eq!(parsed.repo_owner.as_deref(), Some("user"));
+        assert_eq!(parsed.repo_name.as_deref(), Some("blog"));
+        assert_eq!(parsed.state, None);
+        assert_eq!(parsed.text, "hello world");
+    }
+
+    #[test]
+    fn detects_qualifier_tokens() {
+        assert!(looks_like_qualifier("sort:updated-desc"));
+        assert!(looks_like_qualifier("author:foo"));
+        assert!(!looks_like_qualifier("https://example.com"));
+        assert!(!looks_like_qualifier("no_colon"));
     }
 }
