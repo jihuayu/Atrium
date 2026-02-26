@@ -14,11 +14,13 @@ required-features = ["server"]
 [features]
 default = []
 worker = ["dep:worker"]
-server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:reqwest", "dep:tower-http"]
+server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:reqwest", "dep:tower-http", "dep:moka"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+matchit = "0.8"
+bytes = "1"
 sha2 = "0.10"
 hex = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
@@ -34,6 +36,7 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"], optiona
 tokio = { version = "1", features = ["full"], optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
 tower-http = { version = "0.6", features = ["cors"], optional = true }
+moka = { version = "0.12", features = ["future"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"

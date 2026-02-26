@@ -24,6 +24,7 @@ struct ReactionRow {
 
 #[derive(Debug, Deserialize)]
 struct CommentRow {
+    issue_id: i64,
     reactions: String,
 }
 
@@ -108,7 +109,7 @@ pub async fn create_reaction(
 ) -> Result<(ReactionResponse, bool)> {
     let user = ctx.user.ok_or_else(ApiError::unauthorized)?;
     ensure_content(&input.content)?;
-    ensure_comment(ctx, owner, repo_name, comment_id).await?;
+    let comment = ensure_comment(ctx, owner, repo_name, comment_id).await?;
 
     let affected = ctx
         .db
@@ -141,6 +142,10 @@ pub async fn create_reaction(
 
     if affected > 0 {
         update_cached_reactions(ctx, comment_id, &input.content, 1).await?;
+        if let Some(cache) = ctx.comment_cache {
+            cache.invalidate_issue(comment.issue_id).await?;
+            cache.invalidate_comment(comment_id).await?;
+        }
     }
 
     let response = ReactionResponse {
@@ -167,6 +172,7 @@ pub async fn delete_reaction(
     reaction_id: i64,
 ) -> Result<()> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
+    let comment = ensure_comment(ctx, owner, repo_name, comment_id).await?;
 
     let row = db::query_opt::<ReactionRow>(
         ctx.db,
@@ -200,6 +206,10 @@ pub async fn delete_reaction(
 
     if affected > 0 {
         update_cached_reactions(ctx, comment_id, &row.content, -1).await?;
+        if let Some(cache) = ctx.comment_cache {
+            cache.invalidate_issue(comment.issue_id).await?;
+            cache.invalidate_comment(comment_id).await?;
+        }
     }
 
     Ok(())
@@ -208,7 +218,7 @@ pub async fn delete_reaction(
 async fn ensure_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comment_id: i64) -> Result<CommentRow> {
     db::query_opt::<CommentRow>(
         ctx.db,
-            "SELECT c.id, c.reactions \
+            "SELECT c.id, c.issue_id, c.reactions \
              FROM comments c \
              JOIN repos r ON r.id = c.repo_id \
              WHERE c.id = ?1 AND r.owner = ?2 AND r.name = ?3 AND c.deleted_at IS NULL",

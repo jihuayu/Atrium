@@ -8,9 +8,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(3600);
+    let cache_max_issues = env::var("XTALK_CACHE_MAX_ISSUES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(256);
+    let cache_ttl = env::var("XTALK_CACHE_TTL")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60);
     let listen = env::var("XTALK_LISTEN").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    let app = xtalk::platform::server::build_app(&database_url, base_url, token_cache_ttl)
+    let app = xtalk::platform::server::build_app(
+        &database_url,
+        base_url,
+        token_cache_ttl,
+        cache_max_issues,
+        cache_ttl,
+    )
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 

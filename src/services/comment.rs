@@ -13,6 +13,7 @@ use crate::{
 #[derive(Debug, Deserialize, Clone)]
 struct CommentRow {
     id: i64,
+    issue_id: i64,
     body: String,
     user_id: i64,
     created_at: String,
@@ -49,6 +50,14 @@ pub async fn list_comments(
     let issue = resolve_issue(ctx, owner, repo_name, number).await?;
     let (page, per_page, offset) = normalize_pagination(query.page, query.per_page);
 
+    if query.since.is_none() {
+        if let Some(cache) = ctx.comment_cache {
+            if let Some((cached, total)) = cache.get_list(issue.issue_id, page, per_page).await? {
+                return Ok((cached, total, page, per_page));
+            }
+        }
+    }
+
     let mut filters = vec!["c.issue_id = ?1".to_string(), "c.deleted_at IS NULL".to_string()];
     let mut params = vec![DbValue::Integer(issue.issue_id)];
     let mut idx = 2;
@@ -71,7 +80,7 @@ pub async fn list_comments(
 
     let list_sql = format!(
         "SELECT \
-            c.id, c.body, c.user_id, c.created_at, c.updated_at, c.reactions, \
+            c.id, c.issue_id, c.body, c.user_id, c.created_at, c.updated_at, c.reactions, \
             u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
             i.number AS issue_number, r.owner AS repo_owner, r.name AS repo_name, r.admin_user_id \
          FROM comments c \
@@ -90,6 +99,14 @@ pub async fn list_comments(
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
         items.push(to_response(ctx, &row));
+    }
+
+    if query.since.is_none() {
+        if let Some(cache) = ctx.comment_cache {
+            cache
+                .set_list(issue.issue_id, page, per_page, items.clone(), total)
+                .await?;
+        }
     }
 
     Ok((items, total, page, per_page))
@@ -143,17 +160,35 @@ pub async fn create_comment(
         .ok_or_else(|| ApiError::internal("comment insert verification failed"))?
         .id;
 
+    if let Some(cache) = ctx.comment_cache {
+        cache.invalidate_issue(issue.issue_id).await?;
+        cache.invalidate_comment(comment_id).await?;
+    }
+
     get_comment(ctx, owner, repo_name, comment_id).await
 }
 
 pub async fn get_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comment_id: i64) -> Result<CommentResponse> {
     let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
 
+    if let Some(cache) = ctx.comment_cache {
+        if let Some(cached) = cache.get_single(comment_id).await? {
+            if is_comment_in_repo(&cached, owner, repo_name) {
+                return Ok(cached);
+            }
+        }
+    }
+
     let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
         .await?
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
-    Ok(to_response(ctx, &row))
+    let response = to_response(ctx, &row);
+    if let Some(cache) = ctx.comment_cache {
+        cache.set_single(response.clone()).await?;
+    }
+
+    Ok(response)
 }
 
 pub async fn update_comment(
@@ -183,6 +218,11 @@ pub async fn update_comment(
         )
         .await?;
 
+    if let Some(cache) = ctx.comment_cache {
+        cache.invalidate_comment(comment_id).await?;
+        cache.invalidate_issue(row.issue_id).await?;
+    }
+
     get_comment(ctx, owner, repo_name, comment_id).await
 }
 
@@ -210,6 +250,11 @@ pub async fn delete_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, 
             &[DbValue::Integer(comment_id)],
         )
         .await?;
+
+    if let Some(cache) = ctx.comment_cache {
+        cache.invalidate_comment(comment_id).await?;
+        cache.invalidate_issue(row.issue_id).await?;
+    }
 
     Ok(())
 }
@@ -242,7 +287,7 @@ async fn fetch_comment_row(
     db::query_opt::<CommentRow>(
         ctx.db,
             "SELECT \
-                c.id, c.body, c.user_id, c.created_at, c.updated_at, c.reactions, \
+                c.id, c.issue_id, c.body, c.user_id, c.created_at, c.updated_at, c.reactions, \
                 u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
                 i.number AS issue_number, r.owner AS repo_owner, r.name AS repo_name, r.admin_user_id \
              FROM comments c \
@@ -298,4 +343,9 @@ fn to_iso8601(value: &str) -> String {
         return value.to_string();
     }
     value.replace(' ', "T") + "Z"
+}
+
+fn is_comment_in_repo(comment: &CommentResponse, owner: &str, repo: &str) -> bool {
+    let marker = format!("/repos/{}/{}/issues/", owner, repo);
+    comment.issue_url.contains(&marker)
 }
