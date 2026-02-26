@@ -99,32 +99,32 @@ impl AppRouter {
         router
             .get
             .insert(
-                "/repos/:owner/:repo/issues/comments/:id/reactions",
+                "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
                 Route::ListReactions,
             )
             .unwrap();
         router
             .get
-            .insert("/repos/:owner/:repo/issues/comments/:id", Route::GetComment)
+            .insert("/repos/{owner}/{repo}/issues/comments/{id}", Route::GetComment)
+            .unwrap();
+        router
+            .get
+            .insert("/repos/{owner}/{repo}/issues", Route::ListIssues)
+            .unwrap();
+        router
+            .get
+            .insert("/repos/{owner}/{repo}/issues/{number}", Route::GetIssue)
             .unwrap();
         router
             .get
             .insert(
-                "/repos/:owner/:repo/issues/:number/comments",
+                "/repos/{owner}/{repo}/issues/{number}/comments",
                 Route::ListComments,
             )
             .unwrap();
         router
             .get
-            .insert("/repos/:owner/:repo/issues/:number", Route::GetIssue)
-            .unwrap();
-        router
-            .get
-            .insert("/repos/:owner/:repo/issues", Route::ListIssues)
-            .unwrap();
-        router
-            .get
-            .insert("/repos/:owner/:repo/labels", Route::ListLabels)
+            .insert("/repos/{owner}/{repo}/labels", Route::ListLabels)
             .unwrap();
         router
             .get
@@ -135,24 +135,24 @@ impl AppRouter {
         router
             .post
             .insert(
-                "/repos/:owner/:repo/issues/comments/:id/reactions",
+                "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
                 Route::CreateReaction,
             )
             .unwrap();
         router
             .post
+            .insert("/repos/{owner}/{repo}/issues", Route::CreateIssue)
+            .unwrap();
+        router
+            .post
             .insert(
-                "/repos/:owner/:repo/issues/:number/comments",
+                "/repos/{owner}/{repo}/issues/{number}/comments",
                 Route::CreateComment,
             )
             .unwrap();
         router
             .post
-            .insert("/repos/:owner/:repo/issues", Route::CreateIssue)
-            .unwrap();
-        router
-            .post
-            .insert("/repos/:owner/:repo/labels", Route::CreateLabel)
+            .insert("/repos/{owner}/{repo}/labels", Route::CreateLabel)
             .unwrap();
         router
             .post
@@ -170,26 +170,26 @@ impl AppRouter {
         router
             .patch
             .insert(
-                "/repos/:owner/:repo/issues/comments/:id",
+                "/repos/{owner}/{repo}/issues/comments/{id}",
                 Route::UpdateComment,
             )
             .unwrap();
         router
             .patch
-            .insert("/repos/:owner/:repo/issues/:number", Route::UpdateIssue)
+            .insert("/repos/{owner}/{repo}/issues/{number}", Route::UpdateIssue)
             .unwrap();
 
         router
             .delete
             .insert(
-                "/repos/:owner/:repo/issues/comments/:id/reactions/:rid",
+                "/repos/{owner}/{repo}/issues/comments/{id}/reactions/{rid}",
                 Route::DeleteReaction,
             )
             .unwrap();
         router
             .delete
             .insert(
-                "/repos/:owner/:repo/issues/comments/:id",
+                "/repos/{owner}/{repo}/issues/comments/{id}",
                 Route::DeleteComment,
             )
             .unwrap();
@@ -275,4 +275,22 @@ pub fn parse_query_string(raw_query: Option<&str>) -> HashMap<String, String> {
     }
 
     query
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppRouter;
+
+    #[test]
+    fn matches_repo_routes() {
+        let router = AppRouter::new();
+        let issue = router.get.at("/repos/jihuayu/utterances/issues/1");
+        assert!(issue.is_ok(), "issue route error: {:?}", issue.err());
+        let list = router.get.at("/repos/jihuayu/utterances/issues");
+        assert!(list.is_ok(), "list route error: {:?}", list.err());
+        let create = router.post.at("/repos/jihuayu/utterances/issues");
+        assert!(create.is_ok(), "create route error: {:?}", create.err());
+        let comments = router.get.at("/repos/jihuayu/utterances/issues/1/comments");
+        assert!(comments.is_ok(), "comments route error: {:?}", comments.err());
+    }
 }

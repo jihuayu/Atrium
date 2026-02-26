@@ -66,13 +66,12 @@ pub async fn search_issues(
 
     if !parsed.text.is_empty() {
         filters.push(format!(
-            "(i.title LIKE ?{} ESCAPE '\\' OR COALESCE(i.body, '') LIKE ?{} ESCAPE '\\')",
+            "(INSTR(LOWER(i.title), LOWER(?{})) > 0 OR INSTR(LOWER(COALESCE(i.body, '')), LOWER(?{})) > 0)",
             idx,
             idx + 1
         ));
-        let like = format!("%{}%", escape_like_pattern(&parsed.text));
-        params.push(DbValue::Text(like.clone()));
-        params.push(DbValue::Text(like));
+        params.push(DbValue::Text(parsed.text.clone()));
+        params.push(DbValue::Text(parsed.text.clone()));
         idx += 2;
     }
 
@@ -154,23 +153,9 @@ fn parse_query(q: &str) -> ParsedQuery {
     parsed
 }
 
-fn escape_like_pattern(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '%' | '_' | '\\' => {
-                escaped.push('\\');
-                escaped.push(ch);
-            }
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{escape_like_pattern, parse_query};
+    use super::parse_query;
 
     #[test]
     fn parse_qualifiers_and_text() {
@@ -182,8 +167,4 @@ mod tests {
         assert_eq!(parsed.text, "hello world");
     }
 
-    #[test]
-    fn escape_like_pattern_escapes_wildcards_and_escape_char() {
-        assert_eq!(escape_like_pattern(r"100%_done\ok"), r"100\%\_done\\ok");
-    }
 }

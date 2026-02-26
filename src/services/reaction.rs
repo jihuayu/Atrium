@@ -235,7 +235,7 @@ async fn ensure_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comm
 async fn update_cached_reactions(ctx: &AppContext<'_>, comment_id: i64, content: &str, delta: i64) -> Result<()> {
     let row = db::query_opt::<CommentRow>(
         ctx.db,
-            "SELECT id, reactions FROM comments WHERE id = ?1",
+            "SELECT issue_id, reactions FROM comments WHERE id = ?1",
             &[DbValue::Integer(comment_id)],
         )
     .await?
