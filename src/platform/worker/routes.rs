@@ -96,6 +96,19 @@ pub fn router(state: WorkerState) -> Router<'static, WorkerState> {
         .get_async("/search/issues", |req, ctx| async move {
             to_worker_result(search_issues(req, ctx).await)
         })
+        .get_async("/user", |req, ctx| async move {
+            to_worker_result(get_current_user(req, ctx).await)
+        })
+}
+
+async fn get_current_user(req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
+    let db = d1_db(&route)?;
+    let http = WorkerHttpClient;
+    let user = resolve_request_user(&req, &db, &http, route.data.token_cache_ttl).await?;
+    match user {
+        None => Err(ApiError::unauthorized()),
+        Some(user) => json_response(200, &crate::fmt::user::to_api_user(&user), None),
+    }
 }
 
 async fn list_issues(req: Request, route: RouteContext<WorkerState>) -> crate::Result<Response> {
