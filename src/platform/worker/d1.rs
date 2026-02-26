@@ -37,7 +37,9 @@ impl Database for D1Db {
             .map_err(|e| ApiError::internal(format!("d1 execute failed: {}", e)))?;
         if !result.success() {
             return Err(ApiError::internal(
-                result.error().unwrap_or_else(|| "d1 execute failed".to_string()),
+                result
+                    .error()
+                    .unwrap_or_else(|| "d1 execute failed".to_string()),
             ));
         }
         let changed = result
@@ -64,7 +66,9 @@ impl Database for D1Db {
             .map_err(|e| ApiError::internal(format!("d1 query_all failed: {}", e)))?;
         if !result.success() {
             return Err(ApiError::internal(
-                result.error().unwrap_or_else(|| "d1 query_all failed".to_string()),
+                result
+                    .error()
+                    .unwrap_or_else(|| "d1 query_all failed".to_string()),
             ));
         }
         result
@@ -86,7 +90,9 @@ impl Database for D1Db {
         for result in results {
             if !result.success() {
                 return Err(ApiError::internal(
-                    result.error().unwrap_or_else(|| "d1 batch statement failed".to_string()),
+                    result
+                        .error()
+                        .unwrap_or_else(|| "d1 batch statement failed".to_string()),
                 ));
             }
         }

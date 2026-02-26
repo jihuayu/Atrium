@@ -1,4 +1,5 @@
 pub mod comment;
+pub mod exports;
 pub mod issue;
 pub mod label;
 pub mod reaction;

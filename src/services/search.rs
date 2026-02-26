@@ -166,5 +166,4 @@ mod tests {
         assert_eq!(parsed.state.as_deref(), Some("open"));
         assert_eq!(parsed.text, "hello world");
     }
-
 }

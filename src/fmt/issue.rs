@@ -8,7 +8,10 @@ pub fn issue_node_id(issue_id: i64) -> String {
 
 pub fn issue_reactions(base_url: &str, owner: &str, repo: &str, number: i64) -> Reactions {
     Reactions {
-        url: format!("{}/repos/{}/{}/issues/{}/reactions", base_url, owner, repo, number),
+        url: format!(
+            "{}/repos/{}/{}/issues/{}/reactions",
+            base_url, owner, repo, number
+        ),
         ..Default::default()
     }
 }

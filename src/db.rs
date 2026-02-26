@@ -23,7 +23,11 @@ pub trait Database: Send + Sync {
     async fn batch(&self, stmts: Vec<(&str, Vec<DbValue>)>) -> Result<()>;
 }
 
-pub async fn query_opt<T: DeserializeOwned>(db: &dyn Database, sql: &str, params: &[DbValue]) -> Result<Option<T>> {
+pub async fn query_opt<T: DeserializeOwned>(
+    db: &dyn Database,
+    sql: &str,
+    params: &[DbValue],
+) -> Result<Option<T>> {
     let value = db.query_opt_value(sql, params).await?;
     match value {
         None => Ok(None),
@@ -33,7 +37,11 @@ pub async fn query_opt<T: DeserializeOwned>(db: &dyn Database, sql: &str, params
     }
 }
 
-pub async fn query_all<T: DeserializeOwned>(db: &dyn Database, sql: &str, params: &[DbValue]) -> Result<Vec<T>> {
+pub async fn query_all<T: DeserializeOwned>(
+    db: &dyn Database,
+    sql: &str,
+    params: &[DbValue],
+) -> Result<Vec<T>> {
     let values = db.query_all_value(sql, params).await?;
     let mut rows = Vec::with_capacity(values.len());
     for value in values {

@@ -1,4 +1,10 @@
-pub fn build_link_header(base_url: &str, path: &str, page: i64, per_page: i64, total_count: i64) -> Option<String> {
+pub fn build_link_header(
+    base_url: &str,
+    path: &str,
+    page: i64,
+    per_page: i64,
+    total_count: i64,
+) -> Option<String> {
     if per_page <= 0 {
         return None;
     }

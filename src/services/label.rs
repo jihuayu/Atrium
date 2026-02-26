@@ -21,9 +21,9 @@ pub async fn list_labels(ctx: &AppContext<'_>, owner: &str, repo_name: &str) -> 
 
     let rows = db::query_all::<Row>(
         ctx.db,
-            "SELECT id, name, color, description FROM labels WHERE repo_id = ?1 ORDER BY name ASC",
-            &[DbValue::Integer(repo.id)],
-        )
+        "SELECT id, name, color, description FROM labels WHERE repo_id = ?1 ORDER BY name ASC",
+        &[DbValue::Integer(repo.id)],
+    )
     .await?;
 
     Ok(rows
@@ -79,11 +79,14 @@ pub async fn create_label(
 
     let row = db::query_opt::<Row>(
         ctx.db,
-            "SELECT id, name, color, description FROM labels WHERE repo_id = ?1 AND name = ?2",
-            &[DbValue::Integer(repo.id), DbValue::Text(input.name.trim().to_string())],
-        )
+        "SELECT id, name, color, description FROM labels WHERE repo_id = ?1 AND name = ?2",
+        &[
+            DbValue::Integer(repo.id),
+            DbValue::Text(input.name.trim().to_string()),
+        ],
+    )
     .await?
-        .ok_or_else(|| ApiError::internal("failed to create label"))?;
+    .ok_or_else(|| ApiError::internal("failed to create label"))?;
 
     Ok(Label {
         id: row.id,
@@ -93,7 +96,11 @@ pub async fn create_label(
     })
 }
 
-pub async fn ensure_label_ids(ctx: &AppContext<'_>, repo_id: i64, names: &[String]) -> Result<Vec<i64>> {
+pub async fn ensure_label_ids(
+    ctx: &AppContext<'_>,
+    repo_id: i64,
+    names: &[String],
+) -> Result<Vec<i64>> {
     let mut ids = Vec::new();
     for name in names {
         let name = name.trim();
@@ -115,9 +122,9 @@ pub async fn ensure_label_ids(ctx: &AppContext<'_>, repo_id: i64, names: &[Strin
 
         let row = db::query_opt::<Row>(
             ctx.db,
-                "SELECT id FROM labels WHERE repo_id = ?1 AND name = ?2",
-                &[DbValue::Integer(repo_id), DbValue::Text(name.to_string())],
-            )
+            "SELECT id FROM labels WHERE repo_id = ?1 AND name = ?2",
+            &[DbValue::Integer(repo_id), DbValue::Text(name.to_string())],
+        )
         .await?;
         if let Some(v) = row {
             ids.push(v.id);

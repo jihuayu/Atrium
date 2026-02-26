@@ -55,7 +55,10 @@ async fn create_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     let accept = parse_accept(req.accept.as_deref());
 
     let comment = services::comment::create_comment(ctx, &owner, &repo, number, &input).await?;
-    Ok(AppResponse::json(201, &apply_comment_accept(comment, accept)))
+    Ok(AppResponse::json(
+        201,
+        &apply_comment_accept(comment, accept),
+    ))
 }
 
 pub async fn get(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -69,7 +72,10 @@ async fn get_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppRe
     let accept = parse_accept(req.accept.as_deref());
 
     let comment = services::comment::get_comment(ctx, &owner, &repo, id).await?;
-    Ok(AppResponse::json(200, &apply_comment_accept(comment, accept)))
+    Ok(AppResponse::json(
+        200,
+        &apply_comment_accept(comment, accept),
+    ))
 }
 
 pub async fn update(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -84,7 +90,10 @@ async fn update_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     let accept = parse_accept(req.accept.as_deref());
 
     let comment = services::comment::update_comment(ctx, &owner, &repo, id, &input).await?;
-    Ok(AppResponse::json(200, &apply_comment_accept(comment, accept)))
+    Ok(AppResponse::json(
+        200,
+        &apply_comment_accept(comment, accept),
+    ))
 }
 
 pub async fn delete(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {

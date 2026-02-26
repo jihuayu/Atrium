@@ -6,7 +6,9 @@ use crate::{
     fmt::comment as comment_fmt,
     markdown::render_markdown,
     services::{normalize_pagination, repo},
-    types::{CommentResponse, CreateCommentInput, GitHubUser, ListCommentsQuery, UpdateCommentInput},
+    types::{
+        CommentResponse, CreateCommentInput, GitHubUser, ListCommentsQuery, UpdateCommentInput,
+    },
     AppContext, Result,
 };
 
@@ -58,7 +60,10 @@ pub async fn list_comments(
         }
     }
 
-    let mut filters = vec!["c.issue_id = ?1".to_string(), "c.deleted_at IS NULL".to_string()];
+    let mut filters = vec![
+        "c.issue_id = ?1".to_string(),
+        "c.deleted_at IS NULL".to_string(),
+    ];
     let mut params = vec![DbValue::Integer(issue.issue_id)];
     let mut idx = 2;
     if let Some(since) = &query.since {
@@ -68,7 +73,10 @@ pub async fn list_comments(
     }
 
     let where_sql = filters.join(" AND ");
-    let count_sql = format!("SELECT COUNT(*) AS total FROM comments c WHERE {}", where_sql);
+    let count_sql = format!(
+        "SELECT COUNT(*) AS total FROM comments c WHERE {}",
+        where_sql
+    );
     let total = db::query_opt::<CountRow>(ctx.db, &count_sql, &params)
         .await?
         .map(|v| v.total)
@@ -121,7 +129,11 @@ pub async fn create_comment(
 ) -> Result<CommentResponse> {
     let user = ctx.user.ok_or_else(ApiError::unauthorized)?;
     if input.body.trim().is_empty() {
-        return Err(ApiError::validation("IssueComment", "body", "missing_field"));
+        return Err(ApiError::validation(
+            "IssueComment",
+            "body",
+            "missing_field",
+        ));
     }
 
     let issue = resolve_issue(ctx, owner, repo_name, number).await?;
@@ -153,12 +165,12 @@ pub async fn create_comment(
 
     let comment_id = db::query_opt::<IdRow>(
         ctx.db,
-            "SELECT id FROM comments WHERE issue_id = ?1 AND user_id = ?2 ORDER BY id DESC LIMIT 1",
-            &[DbValue::Integer(issue.issue_id), DbValue::Integer(user.id)],
-        )
+        "SELECT id FROM comments WHERE issue_id = ?1 AND user_id = ?2 ORDER BY id DESC LIMIT 1",
+        &[DbValue::Integer(issue.issue_id), DbValue::Integer(user.id)],
+    )
     .await?
-        .ok_or_else(|| ApiError::internal("comment insert verification failed"))?
-        .id;
+    .ok_or_else(|| ApiError::internal("comment insert verification failed"))?
+    .id;
 
     if let Some(cache) = ctx.comment_cache {
         cache.invalidate_issue(issue.issue_id).await?;
@@ -168,7 +180,12 @@ pub async fn create_comment(
     get_comment(ctx, owner, repo_name, comment_id).await
 }
 
-pub async fn get_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comment_id: i64) -> Result<CommentResponse> {
+pub async fn get_comment(
+    ctx: &AppContext<'_>,
+    owner: &str,
+    repo_name: &str,
+    comment_id: i64,
+) -> Result<CommentResponse> {
     let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
 
     if let Some(cache) = ctx.comment_cache {
@@ -200,7 +217,11 @@ pub async fn update_comment(
 ) -> Result<CommentResponse> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
     if input.body.trim().is_empty() {
-        return Err(ApiError::validation("IssueComment", "body", "missing_field"));
+        return Err(ApiError::validation(
+            "IssueComment",
+            "body",
+            "missing_field",
+        ));
     }
 
     let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
@@ -208,7 +229,9 @@ pub async fn update_comment(
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
     if actor.id != row.user_id && row.admin_user_id != Some(actor.id) {
-        return Err(ApiError::forbidden("You are not allowed to update this comment"));
+        return Err(ApiError::forbidden(
+            "You are not allowed to update this comment",
+        ));
     }
 
     ctx.db
@@ -226,14 +249,21 @@ pub async fn update_comment(
     get_comment(ctx, owner, repo_name, comment_id).await
 }
 
-pub async fn delete_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comment_id: i64) -> Result<()> {
+pub async fn delete_comment(
+    ctx: &AppContext<'_>,
+    owner: &str,
+    repo_name: &str,
+    comment_id: i64,
+) -> Result<()> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
     let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
         .await?
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
     if actor.id != row.user_id && row.admin_user_id != Some(actor.id) {
-        return Err(ApiError::forbidden("You are not allowed to delete this comment"));
+        return Err(ApiError::forbidden(
+            "You are not allowed to delete this comment",
+        ));
     }
 
     ctx.db
@@ -259,23 +289,28 @@ pub async fn delete_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, 
     Ok(())
 }
 
-async fn resolve_issue(ctx: &AppContext<'_>, owner: &str, repo_name: &str, number: i64) -> Result<IssueRow> {
+async fn resolve_issue(
+    ctx: &AppContext<'_>,
+    owner: &str,
+    repo_name: &str,
+    number: i64,
+) -> Result<IssueRow> {
     let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
 
     db::query_opt::<IssueRow>(
         ctx.db,
-            "SELECT i.id AS issue_id, i.number AS issue_number, i.repo_id AS repo_id \
+        "SELECT i.id AS issue_id, i.number AS issue_number, i.repo_id AS repo_id \
              FROM issues i \
              JOIN repos r ON r.id = i.repo_id \
              WHERE r.owner = ?1 AND r.name = ?2 AND i.number = ?3 AND i.deleted_at IS NULL",
-            &[
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
-                DbValue::Integer(number),
-            ],
-        )
+        &[
+            DbValue::Text(owner.to_string()),
+            DbValue::Text(repo_name.to_string()),
+            DbValue::Integer(number),
+        ],
+    )
     .await?
-        .ok_or_else(|| ApiError::not_found("Issue"))
+    .ok_or_else(|| ApiError::not_found("Issue"))
 }
 
 async fn fetch_comment_row(
@@ -334,7 +369,13 @@ fn to_response(ctx: &AppContext<'_>, row: &CommentRow) -> CommentResponse {
         } else {
             "NONE".to_string()
         },
-        reactions: comment_fmt::to_reactions(ctx.base_url, &row.repo_owner, &row.repo_name, row.id, &row.reactions),
+        reactions: comment_fmt::to_reactions(
+            ctx.base_url,
+            &row.repo_owner,
+            &row.repo_name,
+            row.id,
+            &row.reactions,
+        ),
     }
 }
 

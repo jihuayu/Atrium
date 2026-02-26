@@ -26,8 +26,12 @@ async fn list_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppR
     };
 
     let accept = parse_accept(req.accept.as_deref());
-    let (items, total, page, per_page) = services::issue::list_issues(ctx, &owner, &repo, &query).await?;
-    let items: Vec<_> = items.into_iter().map(|v| apply_issue_accept(v, accept)).collect();
+    let (items, total, page, per_page) =
+        services::issue::list_issues(ctx, &owner, &repo, &query).await?;
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|v| apply_issue_accept(v, accept))
+        .collect();
 
     let mut response = AppResponse::json(200, &items);
     if let Some(link) = build_link_header(

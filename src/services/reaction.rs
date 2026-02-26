@@ -9,7 +9,9 @@ use crate::{
     AppContext, Result,
 };
 
-const ALLOWED_REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
+const ALLOWED_REACTIONS: [&str; 8] = [
+    "+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes",
+];
 
 #[derive(Debug, Deserialize)]
 struct ReactionRow {
@@ -46,20 +48,20 @@ pub async fn list_reactions(
 
     let total = db::query_opt::<CountRow>(
         ctx.db,
-            "SELECT COUNT(*) AS total \
+        "SELECT COUNT(*) AS total \
              FROM reactions r \
              JOIN comments c ON c.id = r.comment_id \
              JOIN repos rp ON rp.id = c.repo_id \
              WHERE c.id = ?1 AND rp.owner = ?2 AND rp.name = ?3",
-            &[
-                DbValue::Integer(comment_id),
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
-            ],
-        )
+        &[
+            DbValue::Integer(comment_id),
+            DbValue::Text(owner.to_string()),
+            DbValue::Text(repo_name.to_string()),
+        ],
+    )
     .await?
-        .map(|v| v.total)
-        .unwrap_or(0);
+    .map(|v| v.total)
+    .unwrap_or(0);
 
     let rows = db::query_all::<ReactionRow>(
         ctx.db,
@@ -215,31 +217,41 @@ pub async fn delete_reaction(
     Ok(())
 }
 
-async fn ensure_comment(ctx: &AppContext<'_>, owner: &str, repo_name: &str, comment_id: i64) -> Result<CommentRow> {
+async fn ensure_comment(
+    ctx: &AppContext<'_>,
+    owner: &str,
+    repo_name: &str,
+    comment_id: i64,
+) -> Result<CommentRow> {
     db::query_opt::<CommentRow>(
         ctx.db,
-            "SELECT c.id, c.issue_id, c.reactions \
+        "SELECT c.id, c.issue_id, c.reactions \
              FROM comments c \
              JOIN repos r ON r.id = c.repo_id \
              WHERE c.id = ?1 AND r.owner = ?2 AND r.name = ?3 AND c.deleted_at IS NULL",
-            &[
-                DbValue::Integer(comment_id),
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
-            ],
-        )
+        &[
+            DbValue::Integer(comment_id),
+            DbValue::Text(owner.to_string()),
+            DbValue::Text(repo_name.to_string()),
+        ],
+    )
     .await?
-        .ok_or_else(|| ApiError::not_found("IssueComment"))
+    .ok_or_else(|| ApiError::not_found("IssueComment"))
 }
 
-async fn update_cached_reactions(ctx: &AppContext<'_>, comment_id: i64, content: &str, delta: i64) -> Result<()> {
+async fn update_cached_reactions(
+    ctx: &AppContext<'_>,
+    comment_id: i64,
+    content: &str,
+    delta: i64,
+) -> Result<()> {
     let row = db::query_opt::<CommentRow>(
         ctx.db,
-            "SELECT issue_id, reactions FROM comments WHERE id = ?1",
-            &[DbValue::Integer(comment_id)],
-        )
+        "SELECT issue_id, reactions FROM comments WHERE id = ?1",
+        &[DbValue::Integer(comment_id)],
+    )
     .await?
-        .ok_or_else(|| ApiError::not_found("IssueComment"))?;
+    .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
     let mut counts: ReactionCounts = serde_json::from_str(&row.reactions).unwrap_or_default();
     counts.apply_delta(content, delta);

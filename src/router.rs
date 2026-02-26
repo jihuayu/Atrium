@@ -72,6 +72,7 @@ enum Route {
     RenderMarkdown,
     ProxyUtterancesToken,
     GetCurrentUser,
+    ExportUserRepos,
 }
 
 pub struct AppRouter {
@@ -105,7 +106,10 @@ impl AppRouter {
             .unwrap();
         router
             .get
-            .insert("/repos/{owner}/{repo}/issues/comments/{id}", Route::GetComment)
+            .insert(
+                "/repos/{owner}/{repo}/issues/comments/{id}",
+                Route::GetComment,
+            )
             .unwrap();
         router
             .get
@@ -131,6 +135,10 @@ impl AppRouter {
             .insert("/search/issues", Route::SearchIssues)
             .unwrap();
         router.get.insert("/user", Route::GetCurrentUser).unwrap();
+        router
+            .get
+            .insert("/user/export", Route::ExportUserRepos)
+            .unwrap();
 
         router
             .post
@@ -245,6 +253,7 @@ impl AppRouter {
             Route::RenderMarkdown => handlers::render_markdown(req, ctx).await,
             Route::ProxyUtterancesToken => handlers::utterances::proxy_token(req, ctx).await,
             Route::GetCurrentUser => handlers::current_user(req, ctx).await,
+            Route::ExportUserRepos => handlers::exports::export_user_repos(req, ctx).await,
         }
     }
 }
@@ -291,6 +300,12 @@ mod tests {
         let create = router.post.at("/repos/jihuayu/utterances/issues");
         assert!(create.is_ok(), "create route error: {:?}", create.err());
         let comments = router.get.at("/repos/jihuayu/utterances/issues/1/comments");
-        assert!(comments.is_ok(), "comments route error: {:?}", comments.err());
+        assert!(
+            comments.is_ok(),
+            "comments route error: {:?}",
+            comments.err()
+        );
+        let export = router.get.at("/user/export");
+        assert!(export.is_ok(), "export route error: {:?}", export.err());
     }
 }

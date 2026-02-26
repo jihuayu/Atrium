@@ -6,7 +6,10 @@ use crate::{
     fmt::{comment::ReactionCounts, issue as issue_fmt},
     markdown::render_markdown,
     services::{label, normalize_pagination, repo},
-    types::{CreateIssueInput, GitHubUser, IssueResponse, Label, ListIssuesQuery, RepoRow, UpdateIssueInput},
+    types::{
+        CreateIssueInput, GitHubUser, IssueResponse, Label, ListIssuesQuery, RepoRow,
+        UpdateIssueInput,
+    },
     AppContext, Result,
 };
 
@@ -58,11 +61,11 @@ pub async fn create_issue(
 
     let counter = db::query_opt::<CounterRow>(
         ctx.db,
-            "UPDATE repos SET issue_counter = issue_counter + 1 WHERE id = ?1 RETURNING issue_counter",
-            &[DbValue::Integer(repo.id)],
-        )
+        "UPDATE repos SET issue_counter = issue_counter + 1 WHERE id = ?1 RETURNING issue_counter",
+        &[DbValue::Integer(repo.id)],
+    )
     .await?
-        .ok_or_else(|| ApiError::internal("failed to allocate issue number"))?;
+    .ok_or_else(|| ApiError::internal("failed to allocate issue number"))?;
 
     let issue_number = counter.issue_counter;
 
@@ -91,12 +94,12 @@ pub async fn create_issue(
 
     let issue_id = db::query_opt::<IdRow>(
         ctx.db,
-            "SELECT id FROM issues WHERE repo_id = ?1 AND number = ?2",
-            &[DbValue::Integer(repo.id), DbValue::Integer(issue_number)],
-        )
+        "SELECT id FROM issues WHERE repo_id = ?1 AND number = ?2",
+        &[DbValue::Integer(repo.id), DbValue::Integer(issue_number)],
+    )
     .await?
-        .ok_or_else(|| ApiError::internal("issue insert verification failed"))?
-        .id;
+    .ok_or_else(|| ApiError::internal("issue insert verification failed"))?
+    .id;
 
     if let Some(names) = &input.labels {
         set_issue_labels(ctx, repo.id, issue_id, names).await?;
@@ -105,7 +108,12 @@ pub async fn create_issue(
     get_issue(ctx, owner, repo_name, issue_number).await
 }
 
-pub async fn get_issue(ctx: &AppContext<'_>, owner: &str, repo_name: &str, number: i64) -> Result<IssueResponse> {
+pub async fn get_issue(
+    ctx: &AppContext<'_>,
+    owner: &str,
+    repo_name: &str,
+    number: i64,
+) -> Result<IssueResponse> {
     let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
     let row = fetch_issue_row(ctx, owner, repo_name, number)
         .await?
@@ -122,7 +130,10 @@ pub async fn list_issues(
     let repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
     let (page, per_page, offset) = normalize_pagination(query.page, query.per_page);
 
-    let mut filters = vec!["i.repo_id = ?1".to_string(), "i.deleted_at IS NULL".to_string()];
+    let mut filters = vec![
+        "i.repo_id = ?1".to_string(),
+        "i.deleted_at IS NULL".to_string(),
+    ];
     let mut params = vec![DbValue::Integer(repo.id)];
     let mut idx = 2;
 
@@ -146,7 +157,11 @@ pub async fn list_issues(
     }
 
     if let Some(labels) = &query.labels {
-        for label_name in labels.split(',').map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        for label_name in labels
+            .split(',')
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
             filters.push(format!(
                 "EXISTS (SELECT 1 FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id AND l.name = ?{})",
                 idx
@@ -222,7 +237,9 @@ pub async fn update_issue(
         .ok_or_else(|| ApiError::not_found("Issue"))?;
 
     if actor.id != row.user_id && row.admin_user_id != Some(actor.id) {
-        return Err(ApiError::forbidden("You are not allowed to update this issue"));
+        return Err(ApiError::forbidden(
+            "You are not allowed to update this issue",
+        ));
     }
 
     let mut sets = Vec::new();
@@ -279,7 +296,12 @@ pub async fn update_issue(
     get_issue(ctx, owner, repo_name, number).await
 }
 
-pub async fn set_issue_labels(ctx: &AppContext<'_>, repo_id: i64, issue_id: i64, names: &[String]) -> Result<()> {
+pub async fn set_issue_labels(
+    ctx: &AppContext<'_>,
+    repo_id: i64,
+    issue_id: i64,
+    names: &[String],
+) -> Result<()> {
     ctx.db
         .execute(
             "DELETE FROM issue_labels WHERE issue_id = ?1",
@@ -336,13 +358,13 @@ async fn issue_labels(ctx: &AppContext<'_>, issue_id: i64) -> Result<Vec<Label>>
 
     let rows = db::query_all::<Row>(
         ctx.db,
-            "SELECT l.id, l.name, l.color, l.description \
+        "SELECT l.id, l.name, l.color, l.description \
              FROM labels l \
              JOIN issue_labels il ON il.label_id = l.id \
              WHERE il.issue_id = ?1 \
              ORDER BY l.name ASC",
-            &[DbValue::Integer(issue_id)],
-        )
+        &[DbValue::Integer(issue_id)],
+    )
     .await?;
 
     Ok(rows
@@ -393,9 +415,20 @@ async fn build_issue_response(ctx: &AppContext<'_>, row: &IssueRow) -> Result<Is
         updated_at: to_iso8601(&row.updated_at),
         closed_at: row.closed_at.clone().map(|v| to_iso8601(&v)),
         author_association: issue_fmt::author_association(&repo, row.user_id),
-        reactions: issue_fmt::issue_reactions(ctx.base_url, &row.repo_owner, &row.repo_name, row.number),
-        url: format!("{}/repos/{}/{}/issues/{}", ctx.base_url, row.repo_owner, row.repo_name, row.number),
-        html_url: format!("{}/repos/{}/{}/issues/{}", ctx.base_url, row.repo_owner, row.repo_name, row.number),
+        reactions: issue_fmt::issue_reactions(
+            ctx.base_url,
+            &row.repo_owner,
+            &row.repo_name,
+            row.number,
+        ),
+        url: format!(
+            "{}/repos/{}/{}/issues/{}",
+            ctx.base_url, row.repo_owner, row.repo_name, row.number
+        ),
+        html_url: format!(
+            "{}/repos/{}/{}/issues/{}",
+            ctx.base_url, row.repo_owner, row.repo_name, row.number
+        ),
         comments_url: format!(
             "{}/repos/{}/{}/issues/{}/comments",
             ctx.base_url, row.repo_owner, row.repo_name, row.number

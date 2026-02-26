@@ -13,7 +13,8 @@ pub async fn search(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
 
 async fn search_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppResponse> {
     let query = SearchIssuesQuery {
-        q: query_value(&req, "q").ok_or_else(|| ApiError::bad_request("Missing or invalid search query"))?,
+        q: query_value(&req, "q")
+            .ok_or_else(|| ApiError::bad_request("Missing or invalid search query"))?,
         sort: query_value(&req, "sort"),
         order: query_value(&req, "order"),
         per_page: query_i64(&req, "per_page"),

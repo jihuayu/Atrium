@@ -38,8 +38,14 @@ impl ReactionCounts {
             "eyes" => self.eyes += delta,
             _ => {}
         }
-        self.total =
-            self.plus_one + self.minus_one + self.laugh + self.confused + self.heart + self.hooray + self.rocket + self.eyes;
+        self.total = self.plus_one
+            + self.minus_one
+            + self.laugh
+            + self.confused
+            + self.heart
+            + self.hooray
+            + self.rocket
+            + self.eyes;
         if self.total < 0 {
             self.total = 0;
         }
@@ -50,7 +56,13 @@ pub fn comment_node_id(comment_id: i64) -> String {
     general_purpose::STANDARD.encode(format!("xtalk:Comment:{}", comment_id))
 }
 
-pub fn to_reactions(base_url: &str, owner: &str, repo: &str, comment_id: i64, raw_json: &str) -> Reactions {
+pub fn to_reactions(
+    base_url: &str,
+    owner: &str,
+    repo: &str,
+    comment_id: i64,
+    raw_json: &str,
+) -> Reactions {
     let counts: ReactionCounts = serde_json::from_str(raw_json).unwrap_or_default();
     Reactions {
         url: format!(

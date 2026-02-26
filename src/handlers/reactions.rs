@@ -54,7 +54,8 @@ async fn create_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     let id = path_i64(&req, "id")?;
     let input: CreateReactionInput = body_json(&req)?;
 
-    let (reaction, created) = services::reaction::create_reaction(ctx, &owner, &repo, id, &input).await?;
+    let (reaction, created) =
+        services::reaction::create_reaction(ctx, &owner, &repo, id, &input).await?;
     let status = if created { 201 } else { 200 };
     Ok(AppResponse::json(status, &reaction))
 }

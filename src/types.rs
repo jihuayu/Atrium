@@ -214,3 +214,94 @@ pub struct RepoRow {
     pub admin_user_id: Option<i64>,
     pub issue_counter: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoExportResponse {
+    pub schema_version: i64,
+    pub exported_at: String,
+    pub user: GitHubUser,
+    pub repos: Vec<ExportRepoRow>,
+    pub issues: Vec<ExportIssueRow>,
+    pub comments: Vec<ExportCommentRow>,
+    pub labels: Vec<ExportLabelRow>,
+    pub issue_labels: Vec<ExportIssueLabelRow>,
+    pub reactions: Vec<ExportReactionRow>,
+    pub users: Vec<ExportUserRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportRepoRow {
+    pub id: i64,
+    pub owner: String,
+    pub name: String,
+    pub admin_user_id: Option<i64>,
+    pub issue_counter: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportIssueRow {
+    pub id: i64,
+    pub repo_id: i64,
+    pub number: i64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: String,
+    pub state_reason: Option<String>,
+    pub locked: i64,
+    pub user_id: i64,
+    pub comment_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportCommentRow {
+    pub id: i64,
+    pub repo_id: i64,
+    pub issue_id: i64,
+    pub body: String,
+    pub user_id: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
+    pub reactions: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportLabelRow {
+    pub id: i64,
+    pub repo_id: i64,
+    pub name: String,
+    pub description: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportIssueLabelRow {
+    pub issue_id: i64,
+    pub label_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportReactionRow {
+    pub id: i64,
+    pub comment_id: i64,
+    pub user_id: i64,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportUserRow {
+    pub id: i64,
+    pub login: String,
+    pub email: String,
+    pub avatar_url: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub site_admin: i64,
+    pub cached_at: String,
+}
