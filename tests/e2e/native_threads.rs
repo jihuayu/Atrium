@@ -148,7 +148,9 @@ async fn native_threads_get_desc_cursor_and_delete_not_found() {
         .unwrap();
     assert_eq!(first.status(), 200);
     let first_body: serde_json::Value = first.json().await.unwrap();
-    assert!(first_body["pagination"]["has_more"].as_bool().unwrap_or(false));
+    assert!(first_body["pagination"]["has_more"]
+        .as_bool()
+        .unwrap_or(false));
     let next_cursor = first_body["pagination"]["next_cursor"]
         .as_str()
         .unwrap()

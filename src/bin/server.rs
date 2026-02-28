@@ -78,9 +78,12 @@ fn parse_secret_bytes(value: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        sync::{Mutex, OnceLock},
+        time::Duration,
+    };
 
-    use super::{load_config_from_env, parse_secret_bytes};
+    use super::{load_config_from_env, parse_secret_bytes, run, ServerConfig};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -98,6 +101,7 @@ mod tests {
             "ATRIUM_JWT_SECRET",
             "ATRIUM_GOOGLE_CLIENT_ID",
             "ATRIUM_APPLE_APP_ID",
+            "ATRIUM_TEST_BYPASS_SECRET",
             "XTALK_BASE_URL",
             "XTALK_DATABASE_URL",
             "XTALK_TOKEN_CACHE_TTL",
@@ -107,9 +111,18 @@ mod tests {
             "XTALK_JWT_SECRET",
             "XTALK_GOOGLE_CLIENT_ID",
             "XTALK_APPLE_APP_ID",
+            "XTALK_TEST_BYPASS_SECRET",
         ] {
             std::env::remove_var(key);
         }
+    }
+
+    fn temp_db_url() -> (tempfile::TempPath, String) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        (db_file, db_url)
     }
 
     #[test]
@@ -159,7 +172,10 @@ mod tests {
         assert_eq!(fallback_cfg.cache_ttl, 12);
         assert_eq!(fallback_cfg.listen, "127.0.0.1:9999");
         assert_eq!(fallback_cfg.jwt_secret, b"legacy".to_vec());
-        assert_eq!(fallback_cfg.google_client_id.as_deref(), Some("legacy-google"));
+        assert_eq!(
+            fallback_cfg.google_client_id.as_deref(),
+            Some("legacy-google")
+        );
         assert_eq!(fallback_cfg.apple_app_id.as_deref(), Some("legacy-apple"));
 
         std::env::set_var("ATRIUM_BASE_URL", "https://atrium.example");
@@ -171,6 +187,60 @@ mod tests {
         assert_eq!(preferred_cfg.base_url, "https://atrium.example");
         assert_eq!(preferred_cfg.token_cache_ttl, 20);
         assert_eq!(preferred_cfg.jwt_secret, b"atrium".to_vec());
-        assert_eq!(preferred_cfg.google_client_id.as_deref(), Some("atrium-google"));
+        assert_eq!(
+            preferred_cfg.google_client_id.as_deref(),
+            Some("atrium-google")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_returns_error_on_invalid_listen_address() {
+        let (_db_file, db_url) = temp_db_url();
+        let cfg = ServerConfig {
+            base_url: "http://localhost:3000".to_string(),
+            database_url: db_url,
+            token_cache_ttl: 3600,
+            cache_max_issues: 16,
+            cache_ttl: 60,
+            listen: "invalid-listen".to_string(),
+            jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
+            google_client_id: None,
+            apple_app_id: None,
+        };
+
+        let err = run(cfg).await.err().expect("invalid listen must fail");
+        assert!(err.to_string().contains("invalid"));
+    }
+
+    #[tokio::test]
+    async fn run_enters_serve_loop_for_valid_config() {
+        let (_db_file, db_url) = temp_db_url();
+        let cfg = ServerConfig {
+            base_url: "http://localhost:3000".to_string(),
+            database_url: db_url,
+            token_cache_ttl: 3600,
+            cache_max_issues: 16,
+            cache_ttl: 60,
+            listen: "127.0.0.1:0".to_string(),
+            jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
+            google_client_id: None,
+            apple_app_id: None,
+        };
+
+        let timed = tokio::time::timeout(Duration::from_millis(120), run(cfg)).await;
+        assert!(timed.is_err(), "server should keep serving until timeout");
+    }
+
+    #[test]
+    fn main_reads_env_and_propagates_bind_error() {
+        let _guard = env_lock().lock().expect("lock env");
+        clear_server_envs();
+
+        let (_db_file, db_url) = temp_db_url();
+        std::env::set_var("ATRIUM_DATABASE_URL", db_url);
+        std::env::set_var("ATRIUM_LISTEN", "invalid-listen");
+
+        let err = super::main().err().expect("main must fail");
+        assert!(err.to_string().contains("invalid"));
     }
 }

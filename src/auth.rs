@@ -12,8 +12,8 @@ use crate::{
     Result,
 };
 
-#[cfg_attr(feature = "worker", async_trait(?Send))]
-#[cfg_attr(not(feature = "worker"), async_trait)]
+#[cfg_attr(feature = "server", async_trait)]
+#[cfg_attr(not(feature = "server"), async_trait(?Send))]
 pub trait HttpClient: Send + Sync {
     async fn get_github_user(&self, token: &str) -> Result<GitHubApiUser>;
     async fn get_jwks(&self, url: &str) -> Result<UpstreamResponse>;
@@ -401,8 +401,13 @@ mod tests {
     };
 
     #[cfg(feature = "server")]
-    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+    async fn make_db() -> (
+        tempfile::TempPath,
+        crate::platform::server::sqlite::SqliteDatabase,
+    ) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
             .await
@@ -489,8 +494,9 @@ mod tests {
             .expect("must parse bypass");
         assert_eq!(parsed.id, 7);
         assert_eq!(parsed.login, "alice");
-        assert!(super::try_test_bypass("testuser wrong:7:alice:alice@test.com", Some("sec"))
-            .is_none());
+        assert!(
+            super::try_test_bypass("testuser wrong:7:alice:alice@test.com", Some("sec")).is_none()
+        );
     }
 
     #[cfg(any(feature = "test-utils", feature = "worker"))]

@@ -354,7 +354,10 @@ fn parse_max_age(headers: &[(String, String)]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::atomic::{AtomicUsize, Ordering}};
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use async_trait::async_trait;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -371,13 +374,18 @@ mod tests {
     };
 
     use super::{
-        aud_matches, parse_jwt_parts, parse_max_age, verify_apple_id_token,
-        verify_google_id_token, verify_provider_id_token, verify_signature, JwkKey,
+        aud_matches, parse_jwt_parts, parse_max_age, verify_apple_id_token, verify_google_id_token,
+        verify_provider_id_token, verify_signature, JwkKey,
     };
 
     #[cfg(feature = "server")]
-    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+    async fn make_db() -> (
+        tempfile::TempPath,
+        crate::platform::server::sqlite::SqliteDatabase,
+    ) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
             .await
@@ -416,7 +424,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(feature = "server", async_trait)]
+    #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl HttpClient for MockHttp {
         async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
             Err(ApiError::internal("not used"))
@@ -467,8 +476,7 @@ mod tests {
         .to_string();
 
         let header_b64 = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&serde_json::json!({"alg": "RS256", "kid": kid}))
-                .expect("header"),
+            serde_json::to_vec(&serde_json::json!({"alg": "RS256", "kid": kid})).expect("header"),
         );
         let payload_b64 = URL_SAFE_NO_PAD.encode(
             serde_json::to_vec(&serde_json::json!({
@@ -490,7 +498,7 @@ mod tests {
     }
 
     fn ec_jwk_and_signature(msg: &[u8]) -> (JwkKey, Vec<u8>) {
-        use p256::ecdsa::signature::{Signer, SignatureEncoding};
+        use p256::ecdsa::signature::{SignatureEncoding, Signer};
 
         let signing = EcSigningKey::from_slice(&[7u8; 32]).expect("ec key");
         let verify = signing.verifying_key();
@@ -743,14 +751,10 @@ mod tests {
             now + 3600,
         );
         let google_http = MockHttp::jwks_ok(google_jwks);
-        let google_user = verify_google_id_token(
-            &db,
-            &google_http,
-            &google_token,
-            Some("google-client"),
-        )
-        .await
-        .expect("google verify");
+        let google_user =
+            verify_google_id_token(&db, &google_http, &google_token, Some("google-client"))
+                .await
+                .expect("google verify");
         assert_eq!(google_user.provider, "google");
 
         let (apple_jwks, apple_token) = rsa_jwk_and_token(
@@ -852,11 +856,7 @@ mod tests {
     #[tokio::test]
     async fn mock_http_unused_methods_are_exercised() {
         let http = MockHttp::jwks_fail();
-        let github_err = http
-            .get_github_user("token")
-            .await
-            .err()
-            .expect("not used");
+        let github_err = http.get_github_user("token").await.err().expect("not used");
         assert_eq!(github_err.status, 500);
         let utterances_err = http
             .post_utterances_token(&[], &HashMap::new())

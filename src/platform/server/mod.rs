@@ -198,20 +198,21 @@ fn header_value(headers: &HeaderMap, name: header::HeaderName) -> Option<String>
 mod tests {
     use std::sync::Arc;
 
-    use axum::{
-        body::Body,
-        extract::State,
-        http::Request as HttpRequest,
-    };
+    use axum::{body::Body, extract::State, http::Request as HttpRequest};
 
     use super::{
         dispatch, resolve_request_user, AppRouter, AppState, CommentCache, ReqwestHttpClient,
         SqliteDatabase,
     };
-    use crate::{auth::hash_token, db::{Database, DbValue}};
+    use crate::{
+        auth::hash_token,
+        db::{Database, DbValue},
+    };
 
     async fn make_db() -> (tempfile::TempPath, Arc<SqliteDatabase>) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = SqliteDatabase::connect_and_migrate(&db_url)
             .await

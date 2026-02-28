@@ -158,11 +158,9 @@ mod tests {
             Some("</next>; rel=\"next\"".to_string()),
         );
 
-        assert!(
-            response
-                .headers
-                .iter()
-                .any(|(name, value)| name == "Link" && value == "</next>; rel=\"next\"")
-        );
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Link" && value == "</next>; rel=\"next\""));
     }
 }

@@ -398,13 +398,17 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
 
-    use super::{create_comment, delete_comment, get_comment, list_comments, to_iso8601, update_comment};
+    use super::{
+        create_comment, delete_comment, get_comment, list_comments, to_iso8601, update_comment,
+    };
     use crate::{
         auth::{HttpClient, UpstreamResponse},
         db::Database,
         error::ApiError,
         platform::server::cache::CommentCache,
-        types::{CreateCommentInput, GitHubApiUser, GitHubUser, ListCommentsQuery, UpdateCommentInput},
+        types::{
+            CreateCommentInput, GitHubApiUser, GitHubUser, ListCommentsQuery, UpdateCommentInput,
+        },
         AppContext,
     };
 
@@ -433,8 +437,13 @@ mod tests {
         }
     }
 
-    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+    async fn make_db() -> (
+        tempfile::TempPath,
+        crate::platform::server::sqlite::SqliteDatabase,
+    ) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
             .await

@@ -1,13 +1,18 @@
 pub mod d1;
 pub mod http;
 
+use base64::Engine;
+
+#[cfg(target_arch = "wasm32")]
 use crate::{
     auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
     router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     AppContext,
 };
+#[cfg(target_arch = "wasm32")]
 use worker::{event, Context, Env, Method, Request, Response, Result};
 
+#[cfg(target_arch = "wasm32")]
 use self::{d1::D1Db, http::WorkerHttpClient};
 
 pub struct WorkerState {
@@ -20,39 +25,23 @@ pub struct WorkerState {
 }
 
 impl WorkerState {
-    pub fn from_env(env: &worker::Env) -> Self {
-        let base_url = env
-            .var("BASE_URL")
-            .map(|v| v.to_string())
-            .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
-        let token_cache_ttl = env
-            .var("TOKEN_CACHE_TTL")
-            .ok()
-            .and_then(|v| v.to_string().parse::<i64>().ok())
+    fn from_lookup(
+        mut var_lookup: impl FnMut(&str) -> Option<String>,
+        mut secret_lookup: impl FnMut(&str) -> Option<String>,
+    ) -> Self {
+        let base_url =
+            var_lookup("BASE_URL").unwrap_or_else(|| "http://127.0.0.1:8787".to_string());
+        let token_cache_ttl = var_lookup("TOKEN_CACHE_TTL")
+            .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(3600);
-        let jwt_secret = env
-            .secret("JWT_SECRET")
-            .map(|v| parse_secret_bytes(&v.to_string()))
-            .or_else(|_| {
-                env.var("JWT_SECRET")
-                    .map(|v| parse_secret_bytes(&v.to_string()))
-            })
-            .unwrap_or_else(|_| b"atrium-dev-secret-change-me".to_vec());
-        let google_client_id = env
-            .var("GOOGLE_CLIENT_ID")
-            .ok()
-            .map(|v| v.to_string())
-            .filter(|v| !v.trim().is_empty());
-        let apple_app_id = env
-            .var("APPLE_APP_ID")
-            .ok()
-            .map(|v| v.to_string())
-            .filter(|v| !v.trim().is_empty());
-        let test_bypass_secret = env
-            .var("ATRIUM_TEST_BYPASS_SECRET")
-            .or_else(|_| env.var("XTALK_TEST_BYPASS_SECRET"))
-            .ok()
-            .map(|v| v.to_string())
+        let jwt_secret = secret_lookup("JWT_SECRET")
+            .or_else(|| var_lookup("JWT_SECRET"))
+            .map(|v| parse_secret_bytes(&v))
+            .unwrap_or_else(|| b"atrium-dev-secret-change-me".to_vec());
+        let google_client_id = var_lookup("GOOGLE_CLIENT_ID").filter(|v| !v.trim().is_empty());
+        let apple_app_id = var_lookup("APPLE_APP_ID").filter(|v| !v.trim().is_empty());
+        let test_bypass_secret = var_lookup("ATRIUM_TEST_BYPASS_SECRET")
+            .or_else(|| var_lookup("XTALK_TEST_BYPASS_SECRET"))
             .filter(|v| !v.trim().is_empty());
 
         Self {
@@ -64,8 +53,25 @@ impl WorkerState {
             test_bypass_secret,
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_env(env: &worker::Env) -> Self {
+        Self::from_lookup(
+            |key| env.var(key).ok().map(|v| v.to_string()),
+            |key| env.secret(key).ok().map(|v| v.to_string()),
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_env_for_tests(
+        var_lookup: impl FnMut(&str) -> Option<String>,
+        secret_lookup: impl FnMut(&str) -> Option<String>,
+    ) -> Self {
+        Self::from_lookup(var_lookup, secret_lookup)
+    }
 }
 
+#[cfg(target_arch = "wasm32")]
 #[event(fetch)]
 pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Options {
@@ -84,6 +90,7 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     add_cors(response)
 }
 
+#[cfg(target_arch = "wasm32")]
 async fn dispatch(
     req: Request,
     env: &Env,
@@ -150,6 +157,7 @@ async fn dispatch(
     Ok(router.handle(app_req, &ctx).await)
 }
 
+#[cfg(target_arch = "wasm32")]
 async fn to_app_request(req: Request) -> crate::Result<AppRequest> {
     let mut req = req;
 
@@ -194,6 +202,7 @@ async fn to_app_request(req: Request) -> crate::Result<AppRequest> {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
 fn to_worker_response(app: AppResponse) -> Result<Response> {
     let mut response = if app.body.is_empty() {
         Response::empty()?.with_status(app.status)
@@ -209,6 +218,7 @@ fn to_worker_response(app: AppResponse) -> Result<Response> {
     Ok(response)
 }
 
+#[cfg(target_arch = "wasm32")]
 fn add_cors(mut response: Response) -> Result<Response> {
     let h = response.headers_mut();
     h.set("Access-Control-Allow-Origin", "*")?;
@@ -225,9 +235,66 @@ fn add_cors(mut response: Response) -> Result<Response> {
 }
 
 fn parse_secret_bytes(value: &str) -> Vec<u8> {
-    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
-        .or_else(|_| {
-            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, value)
-        })
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value))
         .unwrap_or_else(|_| value.as_bytes().to_vec())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{parse_secret_bytes, WorkerState};
+
+    #[test]
+    fn parse_secret_bytes_supports_standard_urlsafe_and_plain() {
+        assert_eq!(parse_secret_bytes("YXRyaXVt"), b"atrium".to_vec());
+        assert_eq!(
+            parse_secret_bytes("YXRyaXVtLXNlY3JldA"),
+            b"atrium-secret".to_vec()
+        );
+        assert_eq!(parse_secret_bytes("not@base64"), b"not@base64".to_vec());
+    }
+
+    #[test]
+    fn worker_state_from_lookup_applies_defaults_and_fallbacks() {
+        let vars: HashMap<String, String> = HashMap::new();
+        let state =
+            WorkerState::from_env_for_tests(|k| vars.get(k).cloned(), |_k| Option::<String>::None);
+
+        assert_eq!(state.base_url, "http://127.0.0.1:8787");
+        assert_eq!(state.token_cache_ttl, 3600);
+        assert_eq!(state.jwt_secret, b"atrium-dev-secret-change-me".to_vec());
+        assert_eq!(state.google_client_id, None);
+        assert_eq!(state.apple_app_id, None);
+        assert_eq!(state.test_bypass_secret, None);
+    }
+
+    #[test]
+    fn worker_state_from_lookup_prefers_secret_and_filters_empty_values() {
+        let mut vars = HashMap::new();
+        vars.insert("BASE_URL".to_string(), "https://atrium.example".to_string());
+        vars.insert("TOKEN_CACHE_TTL".to_string(), "abc".to_string());
+        vars.insert("JWT_SECRET".to_string(), "YXRyaXVtLXZhcg".to_string());
+        vars.insert("GOOGLE_CLIENT_ID".to_string(), "   ".to_string());
+        vars.insert("APPLE_APP_ID".to_string(), "apple-client".to_string());
+        vars.insert(
+            "XTALK_TEST_BYPASS_SECRET".to_string(),
+            "legacy-bypass".to_string(),
+        );
+
+        let mut secrets = HashMap::new();
+        secrets.insert("JWT_SECRET".to_string(), "YXRyaXVtLXNlY3JldA".to_string());
+
+        let state =
+            WorkerState::from_env_for_tests(|k| vars.get(k).cloned(), |k| secrets.get(k).cloned());
+
+        assert_eq!(state.base_url, "https://atrium.example");
+        assert_eq!(state.token_cache_ttl, 3600);
+        assert_eq!(state.jwt_secret, b"atrium-secret".to_vec());
+        assert_eq!(state.google_client_id, None);
+        assert_eq!(state.apple_app_id.as_deref(), Some("apple-client"));
+        assert_eq!(state.test_bypass_secret.as_deref(), Some("legacy-bypass"));
+    }
 }

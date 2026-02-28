@@ -145,7 +145,9 @@ mod tests {
     use crate::db::{Database, DbValue};
 
     async fn make_db() -> (tempfile::TempPath, SqliteDatabase) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = SqliteDatabase::connect_and_migrate(&db_url)
             .await
@@ -171,7 +173,10 @@ mod tests {
         .expect("insert row");
 
         let one = db
-            .query_opt_value("SELECT i, f, s, b, n FROM t WHERE id = ?1", &[DbValue::Integer(1)])
+            .query_opt_value(
+                "SELECT i, f, s, b, n FROM t WHERE id = ?1",
+                &[DbValue::Integer(1)],
+            )
             .await
             .expect("query one")
             .expect("row exists");

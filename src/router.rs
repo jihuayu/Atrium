@@ -490,7 +490,8 @@ mod tests {
 
     struct NoopDb;
 
-    #[async_trait]
+    #[cfg_attr(feature = "server", async_trait)]
+    #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl Database for NoopDb {
         async fn execute(&self, _sql: &str, _params: &[DbValue]) -> crate::Result<u64> {
             Err(ApiError::internal("not used"))
@@ -519,7 +520,8 @@ mod tests {
 
     struct NoopHttp;
 
-    #[async_trait]
+    #[cfg_attr(feature = "server", async_trait)]
+    #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl HttpClient for NoopHttp {
         async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
             Err(ApiError::internal("not used"))
@@ -609,10 +611,7 @@ mod tests {
             )
             .await;
         assert_eq!(options_resp.status, 204);
-        assert!(options_resp
-            .headers
-            .iter()
-            .any(|(k, _)| k == "Allow"));
+        assert!(options_resp.headers.iter().any(|(k, _)| k == "Allow"));
 
         let method_not_allowed = router
             .handle(

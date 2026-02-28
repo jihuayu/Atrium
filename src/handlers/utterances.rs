@@ -58,7 +58,8 @@ mod tests {
 
     struct NoopDb;
 
-    #[async_trait]
+    #[cfg_attr(feature = "server", async_trait)]
+    #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl Database for NoopDb {
         async fn execute(&self, _sql: &str, _params: &[DbValue]) -> crate::Result<u64> {
             Err(crate::ApiError::internal("not used"))
@@ -99,7 +100,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(feature = "server", async_trait)]
+    #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl HttpClient for MockHttp {
         async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
             Err(crate::ApiError::internal("not used"))
@@ -114,10 +116,7 @@ mod tests {
             body: &[u8],
             headers: &HashMap<String, String>,
         ) -> crate::Result<UpstreamResponse> {
-            *self
-                .seen_headers
-                .lock()
-                .expect("lock headers") = Some(headers.clone());
+            *self.seen_headers.lock().expect("lock headers") = Some(headers.clone());
             *self.seen_body.lock().expect("lock body") = body.to_vec();
 
             Ok(UpstreamResponse {
@@ -166,11 +165,10 @@ mod tests {
         let resp = super::proxy_token(req, &ctx).await;
         assert_eq!(resp.status, 202);
         assert_eq!(resp.body, Bytes::from_static(br#"{"ok":true}"#));
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k == "Content-Type" && v == "application/json")
-        );
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
 
         let seen_headers = http
             .seen_headers
@@ -259,11 +257,7 @@ mod tests {
             .err()
             .expect("noop all");
         assert_eq!(all_err.status, 500);
-        let batch_err = db
-            .batch(Vec::new())
-            .await
-            .err()
-            .expect("noop batch");
+        let batch_err = db.batch(Vec::new()).await.err().expect("noop batch");
         assert_eq!(batch_err.status, 500);
 
         let gh_err = http

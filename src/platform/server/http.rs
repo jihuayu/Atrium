@@ -244,9 +244,7 @@ mod tests {
             .await
             .expect("bind test server");
         let addr = listener.local_addr().expect("local addr");
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve")
-        });
+        let handle = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
         (format!("http://{}", addr), handle.abort_handle())
     }
 
@@ -254,11 +252,9 @@ mod tests {
     async fn github_user_paths() {
         let (base, _handle) = spawn_server().await;
 
-        let ok_client = ReqwestHttpClient::with_urls(
-            format!("{}/user-ok", base),
-            format!("{}/token", base),
-        )
-        .expect("create client");
+        let ok_client =
+            ReqwestHttpClient::with_urls(format!("{}/user-ok", base), format!("{}/token", base))
+                .expect("create client");
         let user = ok_client
             .get_github_user("token")
             .await
@@ -277,11 +273,9 @@ mod tests {
             .expect("must unauthorized");
         assert_eq!(err.status, 401);
 
-        let fail_client = ReqwestHttpClient::with_urls(
-            format!("{}/user-fail", base),
-            format!("{}/token", base),
-        )
-        .expect("create client");
+        let fail_client =
+            ReqwestHttpClient::with_urls(format!("{}/user-fail", base), format!("{}/token", base))
+                .expect("create client");
         let err = fail_client
             .get_github_user("token")
             .await
@@ -305,11 +299,9 @@ mod tests {
     #[tokio::test]
     async fn utterances_and_jwks_paths() {
         let (base, _handle) = spawn_server().await;
-        let client = ReqwestHttpClient::with_urls(
-            format!("{}/user-ok", base),
-            format!("{}/token", base),
-        )
-        .expect("create client");
+        let client =
+            ReqwestHttpClient::with_urls(format!("{}/user-ok", base), format!("{}/token", base))
+                .expect("create client");
 
         let mut forwarded = HashMap::new();
         forwarded.insert("content-type".to_string(), "application/json".to_string());
@@ -327,24 +319,20 @@ mod tests {
             .expect("post token");
         assert_eq!(upstream.status, 201);
         assert_eq!(upstream.body, Bytes::from_static(br#"{"token":"ok"}"#));
-        assert!(
-            upstream
-                .headers
-                .iter()
-                .any(|(k, v)| k == "Cache-Control" && v == "max-age=60")
-        );
+        assert!(upstream
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Cache-Control" && v == "max-age=60"));
 
         let jwks = client
             .get_jwks(&format!("{}/jwks", base))
             .await
             .expect("get jwks");
         assert_eq!(jwks.status, 200);
-        assert!(
-            jwks
-                .headers
-                .iter()
-                .any(|(k, v)| k == "Cache-Control" && v == "max-age=120")
-        );
+        assert!(jwks
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Cache-Control" && v == "max-age=120"));
 
         let err = client
             .get_jwks("http://127.0.0.1:1/unreachable")
@@ -358,11 +346,9 @@ mod tests {
     async fn health_check_and_send_error_paths() {
         let (base, _handle) = spawn_server().await;
 
-        let ok_client = ReqwestHttpClient::with_urls(
-            format!("{}/user-ok", base),
-            format!("{}/token", base),
-        )
-        .expect("create client");
+        let ok_client =
+            ReqwestHttpClient::with_urls(format!("{}/user-ok", base), format!("{}/token", base))
+                .expect("create client");
         let user = ok_client
             .health_check_user("token")
             .await

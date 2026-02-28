@@ -11,8 +11,8 @@ pub enum DbValue {
     Text(String),
 }
 
-#[cfg_attr(feature = "worker", async_trait(?Send))]
-#[cfg_attr(not(feature = "worker"), async_trait)]
+#[cfg_attr(feature = "server", async_trait)]
+#[cfg_attr(not(feature = "server"), async_trait(?Send))]
 pub trait Database: Send + Sync {
     async fn execute(&self, sql: &str, params: &[DbValue]) -> Result<u64>;
 

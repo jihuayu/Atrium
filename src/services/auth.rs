@@ -274,8 +274,13 @@ mod tests {
         AppContext,
     };
 
-    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
-        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+    async fn make_db() -> (
+        tempfile::TempPath,
+        crate::platform::server::sqlite::SqliteDatabase,
+    ) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
             .await
@@ -443,14 +448,11 @@ mod tests {
         .expect("email match");
         assert_eq!(by_email.id, 9);
 
-        let users_count = db::query_opt::<CountRow>(
-            &db,
-            "SELECT COUNT(*) AS total FROM users",
-            &[],
-        )
-        .await
-        .expect("count users")
-        .expect("row");
+        let users_count =
+            db::query_opt::<CountRow>(&db, "SELECT COUNT(*) AS total FROM users", &[])
+                .await
+                .expect("count users")
+                .expect("row");
         assert_eq!(users_count.total, 1);
     }
 

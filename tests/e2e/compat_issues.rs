@@ -106,7 +106,8 @@ async fn compat_issue_filters_and_validation_paths() {
     let owner = "e2e";
     let repo = "compat-issues-filters";
 
-    let alice_number = fixtures::seed_issue(&app, &app.as_alice(), owner, repo, "alice issue").await;
+    let alice_number =
+        fixtures::seed_issue(&app, &app.as_alice(), owner, repo, "alice issue").await;
     let _bob_number = fixtures::seed_issue(&app, &app.as_bob(), owner, repo, "bob issue").await;
 
     let bad_create = app
@@ -129,7 +130,10 @@ async fn compat_issue_filters_and_validation_paths() {
 
     let close_and_label = app
         .as_alice()
-        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, alice_number
+        )))
         .json(&serde_json::json!({
             "state": "closed",
             "state_reason": "completed",
@@ -168,9 +172,11 @@ async fn compat_issue_filters_and_validation_paths() {
         .unwrap();
     assert_eq!(by_label.status(), 200);
     let by_label_payload: serde_json::Value = by_label.json().await.unwrap();
-    assert!(by_label_payload.as_array().unwrap().iter().any(|v| {
-        v["number"].as_i64() == Some(alice_number)
-    }));
+    assert!(by_label_payload
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| { v["number"].as_i64() == Some(alice_number) }));
 
     let since_future = app
         .as_anon()
@@ -187,7 +193,10 @@ async fn compat_issue_filters_and_validation_paths() {
 
     let invalid_state = app
         .as_alice()
-        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, alice_number
+        )))
         .json(&serde_json::json!({"state": "invalid-state"}))
         .send()
         .await
@@ -196,7 +205,10 @@ async fn compat_issue_filters_and_validation_paths() {
 
     let empty_title = app
         .as_alice()
-        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, alice_number
+        )))
         .json(&serde_json::json!({"title": "   "}))
         .send()
         .await
@@ -205,7 +217,10 @@ async fn compat_issue_filters_and_validation_paths() {
 
     let update_body = app
         .as_alice()
-        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, alice_number
+        )))
         .json(&serde_json::json!({"body": "updated body"}))
         .send()
         .await
@@ -214,7 +229,10 @@ async fn compat_issue_filters_and_validation_paths() {
 
     let reopen = app
         .as_alice()
-        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, alice_number
+        )))
         .json(&serde_json::json!({"state": "open"}))
         .send()
         .await

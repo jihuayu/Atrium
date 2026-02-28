@@ -36,7 +36,9 @@ mod tests {
 
     #[test]
     fn reject_invalid_cursor() {
-        let err = decode_cursor("not-a-valid-cursor").err().expect("must fail");
+        let err = decode_cursor("not-a-valid-cursor")
+            .err()
+            .expect("must fail");
         assert_eq!(err.status, 400);
     }
 }
