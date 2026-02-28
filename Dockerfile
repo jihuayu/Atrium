@@ -1,4 +1,4 @@
-FROM rust:1.88-bookworm AS builder
+FROM rust:slim AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release --features server --bin atrium-server
