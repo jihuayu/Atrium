@@ -23,8 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .map(|v| parse_secret_bytes(&v))
         .unwrap_or_else(|| b"xtalk-dev-secret-change-me".to_vec());
-    let google_client_id = env::var("XTALK_GOOGLE_CLIENT_ID").ok();
-    let apple_app_id = env::var("XTALK_APPLE_APP_ID").ok();
+    let google_client_id = env::var("XTALK_GOOGLE_CLIENT_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let apple_app_id = env::var("XTALK_APPLE_APP_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
 
     let app = xtalk::platform::server::build_app(
         &database_url,

@@ -327,6 +327,54 @@ pub fn bearer_from_header(header: Option<&str>) -> Result<Option<String>> {
     }
 }
 
+#[cfg(any(feature = "test-utils", feature = "worker"))]
+pub fn try_test_bypass(
+    auth_header: &str,
+    bypass_secret: Option<&str>,
+) -> Option<crate::types::AuthUser> {
+    let bypass_secret = bypass_secret?;
+    let rest = auth_header.strip_prefix("testuser ")?;
+    let mut parts = rest.splitn(4, ':');
+    let secret = parts.next()?;
+    if secret != bypass_secret {
+        return None;
+    }
+
+    let id = parts.next()?.parse::<i64>().ok()?;
+    let login = parts.next()?.to_string();
+    let email = parts.next().unwrap_or("").to_string();
+
+    Some(crate::types::AuthUser {
+        id,
+        login,
+        email,
+        avatar_url: format!("https://avatars.githubusercontent.com/u/{}?v=4", id),
+        r#type: "User".to_string(),
+        site_admin: false,
+    })
+}
+
+#[cfg(any(feature = "test-utils", feature = "worker"))]
+pub async fn upsert_auth_user(db: &dyn Database, user: &crate::types::AuthUser) -> Result<()> {
+    db.execute(
+        "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now')) \
+         ON CONFLICT(id) DO UPDATE SET \
+         login = excluded.login, email = excluded.email, avatar_url = excluded.avatar_url, \
+         type = excluded.type, site_admin = excluded.site_admin, cached_at = datetime('now')",
+        &[
+            DbValue::Integer(user.id),
+            DbValue::Text(user.login.clone()),
+            DbValue::Text(user.email.clone()),
+            DbValue::Text(user.avatar_url.clone()),
+            DbValue::Text(user.r#type.clone()),
+            DbValue::Integer(user.site_admin as i64),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{hash_token, parse_token};

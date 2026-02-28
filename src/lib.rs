@@ -29,4 +29,5 @@ pub struct AppContext<'a> {
     pub google_client_id: Option<&'a str>,
     pub apple_app_id: Option<&'a str>,
     pub stateful_sessions: bool,
+    pub test_bypass_secret: Option<&'a str>,
 }

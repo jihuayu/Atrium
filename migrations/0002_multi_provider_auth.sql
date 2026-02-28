@@ -1,6 +1,6 @@
-ALTER TABLE users RENAME TO users_v1;
+PRAGMA foreign_keys = OFF;
 
-CREATE TABLE users (
+CREATE TABLE users_v2 (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     login      TEXT NOT NULL UNIQUE,
     email      TEXT NOT NULL DEFAULT '',
@@ -10,7 +10,10 @@ CREATE TABLE users (
     cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-INSERT INTO users SELECT id, login, email, avatar_url, type, site_admin, cached_at FROM users_v1;
+INSERT INTO users_v2 SELECT id, login, email, avatar_url, type, site_admin, cached_at FROM users;
+
+DROP TABLE users;
+ALTER TABLE users_v2 RENAME TO users;
 
 CREATE TABLE user_identities (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +30,7 @@ CREATE INDEX idx_user_identities_user  ON user_identities(user_id);
 CREATE INDEX idx_user_identities_email ON user_identities(email);
 
 INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at)
-SELECT id, 'github', CAST(id AS TEXT), email, avatar_url, cached_at FROM users_v1;
+SELECT id, 'github', CAST(id AS TEXT), email, avatar_url, cached_at FROM users;
 
 ALTER TABLE token_cache RENAME TO token_cache_v1;
 
@@ -63,5 +66,6 @@ CREATE TABLE jwks_cache (
     expires_at TEXT NOT NULL
 );
 
-DROP TABLE users_v1;
 DROP TABLE token_cache_v1;
+
+PRAGMA foreign_keys = ON;

@@ -93,3 +93,57 @@ pub async fn current_user(_req: AppRequest, ctx: &AppContext<'_>) -> AppResponse
         None => AppResponse::from_error(ApiError::unauthorized()),
     }
 }
+
+pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
+    let text = concat!(
+        "xtalk - GitHub Issues compatible comment backend\n",
+        "\n",
+        "GitHub-Compatible API (token auth):\n",
+        "  GET    /repos/{owner}/{repo}/issues\n",
+        "  POST   /repos/{owner}/{repo}/issues\n",
+        "  GET    /repos/{owner}/{repo}/issues/{number}\n",
+        "  PATCH  /repos/{owner}/{repo}/issues/{number}\n",
+        "  GET    /repos/{owner}/{repo}/issues/{number}/comments\n",
+        "  POST   /repos/{owner}/{repo}/issues/{number}/comments\n",
+        "  GET    /repos/{owner}/{repo}/issues/comments/{id}\n",
+        "  PATCH  /repos/{owner}/{repo}/issues/comments/{id}\n",
+        "  DELETE /repos/{owner}/{repo}/issues/comments/{id}\n",
+        "  POST   /repos/{owner}/{repo}/issues/comments/{id}/reactions\n",
+        "  DELETE /repos/{owner}/{repo}/issues/comments/{id}/reactions/{id}\n",
+        "  GET    /search/issues?q=...\n",
+        "\n",
+        "Native API (JWT auth):\n",
+        "  POST   /api/v1/auth/github\n",
+        "  POST   /api/v1/auth/google\n",
+        "  POST   /api/v1/auth/apple\n",
+        "  POST   /api/v1/auth/refresh\n",
+        "  DELETE /api/v1/auth/session\n",
+        "  GET    /api/v1/auth/me\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/threads\n",
+        "  POST   /api/v1/repos/{owner}/{repo}/threads\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/threads/{number}\n",
+        "  PATCH  /api/v1/repos/{owner}/{repo}/threads/{number}\n",
+        "  DELETE /api/v1/repos/{owner}/{repo}/threads/{number}\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/threads/{number}/comments\n",
+        "  POST   /api/v1/repos/{owner}/{repo}/threads/{number}/comments\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/comments/{id}\n",
+        "  PATCH  /api/v1/repos/{owner}/{repo}/comments/{id}\n",
+        "  DELETE /api/v1/repos/{owner}/{repo}/comments/{id}\n",
+        "  POST   /api/v1/repos/{owner}/{repo}/comments/{id}/reactions\n",
+        "  DELETE /api/v1/repos/{owner}/{repo}/comments/{id}/reactions/{content}\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/labels\n",
+        "  POST   /api/v1/repos/{owner}/{repo}/labels\n",
+        "  DELETE /api/v1/repos/{owner}/{repo}/labels/{name}\n",
+        "  GET    /api/v1/repos/{owner}/{repo}/export\n",
+        "\n",
+        "Source: https://github.com/pnnh/xtalk\n",
+    );
+    AppResponse {
+        status: 200,
+        headers: vec![(
+            "Content-Type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        )],
+        body: bytes::Bytes::from(text),
+    }
+}

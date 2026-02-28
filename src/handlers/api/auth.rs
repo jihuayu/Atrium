@@ -28,6 +28,20 @@ pub async fn google(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
 }
 
 async fn google_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppResponse> {
+    if ctx
+        .google_client_id
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        return Ok(AppResponse::json(
+            501,
+            &serde_json::json!({
+                "error": "not_configured",
+                "message": "Google login is not enabled on this server"
+            }),
+        ));
+    }
+
     let input: ProviderTokenInput = body_json(&req)?;
     let provider_user =
         jwks::verify_google_id_token(ctx.db, ctx.http, &input.token, ctx.google_client_id).await?;
@@ -49,6 +63,20 @@ pub async fn apple(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
 }
 
 async fn apple_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppResponse> {
+    if ctx
+        .apple_app_id
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        return Ok(AppResponse::json(
+            501,
+            &serde_json::json!({
+                "error": "not_configured",
+                "message": "Apple login is not enabled on this server"
+            }),
+        ));
+    }
+
     let input: ProviderTokenInput = body_json(&req)?;
     let provider_user =
         jwks::verify_apple_id_token(ctx.db, ctx.http, &input.token, ctx.apple_app_id).await?;

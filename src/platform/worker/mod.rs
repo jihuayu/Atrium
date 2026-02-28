@@ -16,6 +16,7 @@ pub struct WorkerState {
     pub jwt_secret: Vec<u8>,
     pub google_client_id: Option<String>,
     pub apple_app_id: Option<String>,
+    pub test_bypass_secret: Option<String>,
 }
 
 impl WorkerState {
@@ -37,8 +38,21 @@ impl WorkerState {
                     .map(|v| parse_secret_bytes(&v.to_string()))
             })
             .unwrap_or_else(|_| b"xtalk-dev-secret-change-me".to_vec());
-        let google_client_id = env.var("GOOGLE_CLIENT_ID").ok().map(|v| v.to_string());
-        let apple_app_id = env.var("APPLE_APP_ID").ok().map(|v| v.to_string());
+        let google_client_id = env
+            .var("GOOGLE_CLIENT_ID")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.trim().is_empty());
+        let apple_app_id = env
+            .var("APPLE_APP_ID")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.trim().is_empty());
+        let test_bypass_secret = env
+            .var("XTALK_TEST_BYPASS_SECRET")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.trim().is_empty());
 
         Self {
             base_url,
@@ -46,6 +60,7 @@ impl WorkerState {
             jwt_secret,
             google_client_id,
             apple_app_id,
+            test_bypass_secret,
         }
     }
 }
@@ -83,6 +98,27 @@ async fn dispatch(
     };
     let http = WorkerHttpClient;
 
+    if let Some(header) = app_req.auth_header.as_deref() {
+        if let Some(user) =
+            crate::auth::try_test_bypass(header, state.test_bypass_secret.as_deref())
+        {
+            crate::auth::upsert_auth_user(&db, &user).await?;
+            let ctx = AppContext {
+                db: &db,
+                http: &http,
+                comment_cache: None,
+                base_url: &state.base_url,
+                user: Some(&user),
+                jwt_secret: &state.jwt_secret,
+                google_client_id: state.google_client_id.as_deref(),
+                apple_app_id: state.apple_app_id.as_deref(),
+                stateful_sessions: false,
+                test_bypass_secret: state.test_bypass_secret.as_deref(),
+            };
+            return Ok(router.handle(app_req, &ctx).await);
+        }
+    }
+
     let user = if app_req.path.starts_with("/api/v1/auth/") {
         None
     } else if app_req.path.starts_with("/api/v1/") {
@@ -107,6 +143,7 @@ async fn dispatch(
         google_client_id: state.google_client_id.as_deref(),
         apple_app_id: state.apple_app_id.as_deref(),
         stateful_sessions: false,
+        test_bypass_secret: state.test_bypass_secret.as_deref(),
     };
 
     Ok(router.handle(app_req, &ctx).await)

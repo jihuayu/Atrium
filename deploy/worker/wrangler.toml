@@ -12,6 +12,9 @@ TOKEN_CACHE_TTL = "3600"
 GOOGLE_CLIENT_ID = ""
 APPLE_APP_ID = ""
 
+# test bypass is only for local/CI e2e, do not set in production
+# XTALK_TEST_BYPASS_SECRET = ""
+
 [[d1_databases]]
 binding = "DB"
 database_name = "xtalk-db"

@@ -75,6 +75,7 @@ enum Route {
     ApiListLabels,
     ApiCreateLabel,
     ApiDeleteLabel,
+    ApiExportRepo,
     ApiGetRepoSettings,
     ApiUpdateRepoSettings,
     ListIssues,
@@ -96,6 +97,7 @@ enum Route {
     ProxyUtterancesToken,
     GetCurrentUser,
     ExportUserRepos,
+    Root,
 }
 
 pub struct AppRouter {
@@ -120,6 +122,10 @@ impl AppRouter {
             delete: matchit::Router::new(),
         };
 
+        router
+            .get
+            .insert("/", Route::Root)
+            .unwrap();
         router
             .get
             .insert("/api/v1/auth/me", Route::ApiAuthMe)
@@ -155,6 +161,10 @@ impl AppRouter {
         router
             .get
             .insert("/api/v1/repos/{owner}/{repo}/labels", Route::ApiListLabels)
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/repos/{owner}/{repo}/export", Route::ApiExportRepo)
             .unwrap();
         router
             .get
@@ -410,6 +420,7 @@ impl AppRouter {
             Route::ApiListLabels => handlers::api::labels::list(req, ctx).await,
             Route::ApiCreateLabel => handlers::api::labels::create(req, ctx).await,
             Route::ApiDeleteLabel => handlers::api::labels::delete(req, ctx).await,
+            Route::ApiExportRepo => handlers::api::export::get(req, ctx).await,
             Route::ApiGetRepoSettings => handlers::api::admin::get(req, ctx).await,
             Route::ApiUpdateRepoSettings => handlers::api::admin::update(req, ctx).await,
             Route::ListIssues => handlers::issues::list(req, ctx).await,
@@ -431,6 +442,7 @@ impl AppRouter {
             Route::ProxyUtterancesToken => handlers::utterances::proxy_token(req, ctx).await,
             Route::GetCurrentUser => handlers::current_user(req, ctx).await,
             Route::ExportUserRepos => handlers::exports::export_user_repos(req, ctx).await,
+            Route::Root => handlers::root(req, ctx).await,
         }
     }
 }

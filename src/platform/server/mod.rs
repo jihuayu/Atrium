@@ -33,6 +33,7 @@ pub struct AppState {
     pub jwt_secret: Vec<u8>,
     pub google_client_id: Option<String>,
     pub apple_app_id: Option<String>,
+    pub test_bypass_secret: Option<String>,
 }
 
 pub async fn build_app(
@@ -59,6 +60,9 @@ pub async fn build_app(
         jwt_secret,
         google_client_id,
         apple_app_id,
+        test_bypass_secret: std::env::var("XTALK_TEST_BYPASS_SECRET")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
     };
 
     let app = Router::new().fallback(dispatch).with_state(state).layer(
@@ -119,6 +123,7 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         google_client_id: state.google_client_id.as_deref(),
         apple_app_id: state.apple_app_id.as_deref(),
         stateful_sessions: true,
+        test_bypass_secret: state.test_bypass_secret.as_deref(),
     };
 
     let app_response = state.router.handle(app_req, &ctx).await;
@@ -130,6 +135,16 @@ async fn resolve_request_user(
     auth_header: Option<&str>,
     state: &AppState,
 ) -> Result<Option<GitHubUser>> {
+    #[cfg(any(feature = "test-utils", feature = "worker"))]
+    if let Some(header) = auth_header {
+        if let Some(user) =
+            crate::auth::try_test_bypass(header, state.test_bypass_secret.as_deref())
+        {
+            crate::auth::upsert_auth_user(state.db.as_ref(), &user).await?;
+            return Ok(Some(user));
+        }
+    }
+
     if path.starts_with("/api/v1/auth/") {
         return Ok(None);
     }
