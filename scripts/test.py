@@ -103,7 +103,7 @@ def run_worker_tests(extra: list[str]) -> None:
     temp_cfg_path: str | None = None
     local_d1_dir: Path | None = None
 
-    def kill_proc_tree(pid: int) -> None:
+    def kill_proc_tree(pid: int, *, force: bool = False) -> None:
         """Kill a process and all its children. On Windows with shell=True,
         terminate() only kills cmd.exe — child node/workerd processes survive."""
         if sys.platform == "win32":
@@ -114,7 +114,8 @@ def run_worker_tests(extra: list[str]) -> None:
             )
         else:
             try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
+                sig = signal.SIGKILL if force else signal.SIGTERM
+                os.killpg(os.getpgid(pid), sig)
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -126,7 +127,7 @@ def run_worker_tests(extra: list[str]) -> None:
             try:
                 wrangler_proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                wrangler_proc.kill()
+                kill_proc_tree(wrangler_proc.pid, force=True)
 
         if temp_cfg_path:
             Path(temp_cfg_path).unlink(missing_ok=True)
@@ -189,6 +190,7 @@ def run_worker_tests(extra: list[str]) -> None:
 
         # ── Step 3: Start wrangler dev (local mode) ──────────────
         print(f"\n[3/4] Starting wrangler dev on :{test_port} (local mode)...")
+        # On POSIX, isolate wrangler in its own session so killpg only targets wrangler.
         wrangler_proc = subprocess.Popen(
             NPX
             + [
@@ -201,6 +203,7 @@ def run_worker_tests(extra: list[str]) -> None:
             ],
             cwd=WORKER_DIR,
             shell=SHELL,
+            start_new_session=(sys.platform != "win32"),
         )
 
         # 等待就绪（最多 60s）

@@ -39,7 +39,7 @@ cargo run --features server --bin atrium-server
 
 ```bash
 cargo install worker-build
-worker-build --release --features worker
+worker-build --profile release-wasm --features worker
 ```
 
 Worker 配置见 `deploy/worker/wrangler.toml`。

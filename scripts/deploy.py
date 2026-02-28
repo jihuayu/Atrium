@@ -50,7 +50,10 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 def step_build() -> None:
     banner("Step 1: Build Worker WASM")
     run(["cargo", "install", "-q", "worker-build"], cwd=PROJECT_ROOT)
-    run(["worker-build", "--release", "--features", "worker"], cwd=PROJECT_ROOT)
+    run(
+        ["worker-build", "--profile", "release-wasm", "--features", "worker"],
+        cwd=PROJECT_ROOT,
+    )
     print("  Build complete.")
 
 
