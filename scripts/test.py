@@ -165,7 +165,7 @@ def run_worker_tests(extra: list[str]) -> None:
             f.write(config)
 
         # 应用合并 schema 到本地 D1（单文件，避免迁移 rename/drop 与 D1 FK 冲突）
-        test_init_sql = MIGRATIONS_DIR / "test_init.sql"
+        test_init_sql = WORKER_DIR / "test_init.sql"
         print(f"  Applying schema from {test_init_sql.name}...")
         run(
             NPX

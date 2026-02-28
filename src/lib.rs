@@ -12,6 +12,17 @@ pub mod router;
 pub mod services;
 pub mod types;
 
+#[cfg(all(test, feature = "server", feature = "test-utils"))]
+extern crate self as xtalk;
+
+#[cfg(all(test, feature = "server", feature = "test-utils"))]
+#[path = "../tests/common/mod.rs"]
+pub mod common;
+
+#[cfg(all(test, feature = "server", feature = "test-utils"))]
+#[path = "../tests/e2e/mod.rs"]
+mod lib_e2e;
+
 pub use error::{ApiError, Result};
 
 use auth::HttpClient;

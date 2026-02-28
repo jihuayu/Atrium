@@ -351,3 +351,69 @@ fn parse_max_age(headers: &[(String, String)]) -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{aud_matches, parse_jwt_parts, parse_max_age};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    fn make_jwt(header: serde_json::Value, payload: serde_json::Value) -> String {
+        let h = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header json"));
+        let p = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload json"));
+        format!("{}.{}.{}", h, p, URL_SAFE_NO_PAD.encode("sig"))
+    }
+
+    #[test]
+    fn parse_max_age_from_cache_control() {
+        let headers = vec![(
+            "Cache-Control".to_string(),
+            "public, max-age=3600, must-revalidate".to_string(),
+        )];
+        assert_eq!(parse_max_age(&headers), Some(3600));
+    }
+
+    #[test]
+    fn parse_max_age_absent_returns_none() {
+        let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        assert_eq!(parse_max_age(&headers), None);
+    }
+
+    #[test]
+    fn aud_matches_string_and_array() {
+        assert!(aud_matches(&serde_json::json!("client-1"), "client-1"));
+        assert!(aud_matches(
+            &serde_json::json!(["other", "client-1"]),
+            "client-1"
+        ));
+        assert!(!aud_matches(&serde_json::json!(["other"]), "client-1"));
+        assert!(!aud_matches(&serde_json::json!({"aud": "bad"}), "client-1"));
+    }
+
+    #[test]
+    fn parse_jwt_parts_success() {
+        let token = make_jwt(
+            serde_json::json!({"alg": "RS256", "kid": "k1"}),
+            serde_json::json!({
+                "sub": "u1",
+                "email": "a@b.com",
+                "picture": "x",
+                "iss": "https://accounts.google.com",
+                "exp": chrono::Utc::now().timestamp() + 3600,
+                "aud": "client-1"
+            }),
+        );
+
+        let (header, payload, signing_input, sig) = parse_jwt_parts(&token).expect("must parse");
+        assert_eq!(header.alg, "RS256");
+        assert_eq!(header.kid.as_deref(), Some("k1"));
+        assert_eq!(payload.sub, "u1");
+        assert!(signing_input.contains('.'));
+        assert!(!sig.is_empty());
+    }
+
+    #[test]
+    fn parse_jwt_parts_rejects_bad_shape() {
+        let err = parse_jwt_parts("a.b").err().expect("must fail");
+        assert_eq!(err.status, 401);
+    }
+}

@@ -1,5 +1,6 @@
 pub mod compat_comments;
 pub mod compat_issues;
+pub mod compat_labels;
 pub mod compat_misc;
 pub mod compat_reactions;
 pub mod compat_search;

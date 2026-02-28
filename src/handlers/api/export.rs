@@ -356,3 +356,36 @@ fn to_iso8601(value: &str) -> String {
     }
     value.replace(' ', "T") + "Z"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{csv_escape, normalize_since, to_iso8601};
+
+    #[test]
+    fn csv_escape_handles_quotes() {
+        let value = "a\"b";
+        let escaped = csv_escape(value);
+        assert_eq!(escaped, "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn normalize_since_accepts_iso8601() {
+        let out = normalize_since(Some("2025-01-15T08:00:00Z".to_string()))
+            .expect("parse should succeed");
+        assert_eq!(out.as_deref(), Some("2025-01-15 08:00:00"));
+    }
+
+    #[test]
+    fn normalize_since_rejects_invalid() {
+        let err = normalize_since(Some("invalid-time".to_string()))
+            .err()
+            .expect("must fail");
+        assert_eq!(err.status, 400);
+    }
+
+    #[test]
+    fn to_iso8601_formats_sqlite_datetime() {
+        assert_eq!(to_iso8601("2025-01-15 08:00:00"), "2025-01-15T08:00:00Z");
+        assert_eq!(to_iso8601("2025-01-15T08:00:00Z"), "2025-01-15T08:00:00Z");
+    }
+}

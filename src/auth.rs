@@ -378,7 +378,82 @@ pub async fn upsert_auth_user(db: &dyn Database, user: &crate::types::AuthUser) 
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_token, parse_token};
+    use super::{bearer_from_header, hash_token, parse_token};
+
+    #[cfg(feature = "server")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(feature = "server")]
+    use async_trait::async_trait;
+    #[cfg(feature = "server")]
+    use bytes::Bytes;
+    #[cfg(feature = "server")]
+    use serde::Deserialize;
+
+    #[cfg(feature = "server")]
+    use super::{resolve_github_user, resolve_xtalk_jwt_user, HttpClient, UpstreamResponse};
+    #[cfg(feature = "server")]
+    use crate::{
+        db::{self, Database, DbValue},
+        error::ApiError,
+        jwt,
+        types::{AuthUser, GitHubApiUser, JwtClaims},
+    };
+
+    #[cfg(feature = "server")]
+    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
+        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("db init");
+        (db_file, db)
+    }
+
+    #[cfg(feature = "server")]
+    struct MockHttp {
+        calls: AtomicUsize,
+        user: GitHubApiUser,
+    }
+
+    #[cfg(feature = "server")]
+    impl MockHttp {
+        fn new(user: GitHubApiUser) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                user,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[async_trait]
+    impl HttpClient for MockHttp {
+        async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.user.clone())
+        }
+
+        async fn get_jwks(&self, _url: &str) -> crate::Result<UpstreamResponse> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn post_utterances_token(
+            &self,
+            _body: &[u8],
+            _headers: &std::collections::HashMap<String, String>,
+        ) -> crate::Result<UpstreamResponse> {
+            Ok(UpstreamResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Bytes::new(),
+            })
+        }
+    }
 
     #[test]
     fn parses_token_and_bearer() {
@@ -393,5 +468,179 @@ mod tests {
         let b = hash_token("ghp_example");
         assert_eq!(a, b);
         assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn bearer_from_header_variants() {
+        assert_eq!(bearer_from_header(None).expect("none ok"), None);
+        assert_eq!(
+            bearer_from_header(Some("Bearer abc"))
+                .expect("bearer ok")
+                .as_deref(),
+            Some("abc")
+        );
+        assert!(bearer_from_header(Some("Basic abc")).is_err());
+    }
+
+    #[cfg(any(feature = "test-utils", feature = "worker"))]
+    #[test]
+    fn test_bypass_parsing_and_secret_check() {
+        let parsed = super::try_test_bypass("testuser sec:7:alice:alice@test.com", Some("sec"))
+            .expect("must parse bypass");
+        assert_eq!(parsed.id, 7);
+        assert_eq!(parsed.login, "alice");
+        assert!(super::try_test_bypass("testuser wrong:7:alice:alice@test.com", Some("sec"))
+            .is_none());
+    }
+
+    #[cfg(any(feature = "test-utils", feature = "worker"))]
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn upsert_auth_user_inserts_and_updates() {
+        #[derive(Debug, Deserialize)]
+        struct UserRow {
+            login: String,
+            email: String,
+        }
+
+        let (_db_file, db) = make_db().await;
+        let user = AuthUser {
+            id: 100,
+            login: "alice".to_string(),
+            email: "alice@a.com".to_string(),
+            avatar_url: "https://x/a.png".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        };
+
+        super::upsert_auth_user(&db, &user)
+            .await
+            .expect("first upsert");
+
+        let mut updated = user.clone();
+        updated.login = "alice2".to_string();
+        updated.email = "alice2@a.com".to_string();
+        super::upsert_auth_user(&db, &updated)
+            .await
+            .expect("second upsert");
+
+        let row = db::query_opt::<UserRow>(
+            &db,
+            "SELECT login, email FROM users WHERE id = ?1",
+            &[DbValue::Integer(100)],
+        )
+        .await
+        .expect("query user")
+        .expect("row exists");
+        assert_eq!(row.login, "alice2");
+        assert_eq!(row.email, "alice2@a.com");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn resolve_github_user_creates_and_hits_cache() {
+        #[derive(Debug, Deserialize)]
+        struct TokenRow {
+            provider: String,
+        }
+
+        let (_db_file, db) = make_db().await;
+        let http = MockHttp::new(GitHubApiUser {
+            id: 42,
+            login: "Alice".to_string(),
+            email: Some("alice@example.com".to_string()),
+            avatar_url: "https://avatars/a".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        });
+
+        let first = resolve_github_user(&db, &http, "gh-token", 3600)
+            .await
+            .expect("first resolve");
+        assert_eq!(first.login, "Alice");
+        assert_eq!(http.calls(), 1);
+
+        let second = resolve_github_user(&db, &http, "gh-token", 3600)
+            .await
+            .expect("cached resolve");
+        assert_eq!(second.id, first.id);
+        assert_eq!(http.calls(), 1);
+
+        let row = db::query_opt::<TokenRow>(
+            &db,
+            "SELECT provider FROM token_cache WHERE token_hash = ?1",
+            &[DbValue::Text(hash_token("gh-token"))],
+        )
+        .await
+        .expect("query cache")
+        .expect("cache row");
+        assert_eq!(row.provider, "github");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn resolve_xtalk_jwt_user_requires_access_token() {
+        let (_db_file, db) = make_db().await;
+        db.execute(
+            "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+            &[
+                DbValue::Integer(7),
+                DbValue::Text("alice".to_string()),
+                DbValue::Text("alice@test.com".to_string()),
+                DbValue::Text("https://avatars/a".to_string()),
+                DbValue::Text("User".to_string()),
+                DbValue::Integer(0),
+            ],
+        )
+        .await
+        .expect("insert user");
+
+        let now = chrono::Utc::now().timestamp();
+        let refresh = jwt::sign_jwt(
+            &JwtClaims {
+                sub: "7".to_string(),
+                login: "alice".to_string(),
+                iss: "xtalk".to_string(),
+                iat: now,
+                exp: now + 3600,
+                jti: "j1".to_string(),
+                token_type: "refresh".to_string(),
+            },
+            b"test-jwt-secret-at-least-32-bytes!!",
+        )
+        .expect("sign refresh");
+        let access = jwt::sign_jwt(
+            &JwtClaims {
+                sub: "7".to_string(),
+                login: "alice".to_string(),
+                iss: "xtalk".to_string(),
+                iat: now,
+                exp: now + 3600,
+                jti: "j2".to_string(),
+                token_type: "access".to_string(),
+            },
+            b"test-jwt-secret-at-least-32-bytes!!",
+        )
+        .expect("sign access");
+
+        let err = resolve_xtalk_jwt_user(
+            &db,
+            Some(&format!("Bearer {}", refresh)),
+            b"test-jwt-secret-at-least-32-bytes!!",
+        )
+        .await
+        .err()
+        .expect("refresh must fail");
+        assert_eq!(err.status, 401);
+
+        let user = resolve_xtalk_jwt_user(
+            &db,
+            Some(&format!("Bearer {}", access)),
+            b"test-jwt-secret-at-least-32-bytes!!",
+        )
+        .await
+        .expect("access must pass")
+        .expect("user exists");
+        assert_eq!(user.id, 7);
     }
 }

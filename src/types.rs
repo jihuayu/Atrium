@@ -317,6 +317,45 @@ pub struct CursorPagination {
     pub has_more: bool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{GitHubApiUser, GitHubUser};
+
+    #[test]
+    fn github_user_from_api_user_keeps_fields() {
+        let api = GitHubApiUser {
+            id: 7,
+            login: "alice".to_string(),
+            email: Some("alice@test.com".to_string()),
+            avatar_url: "https://avatars/a".to_string(),
+            r#type: "User".to_string(),
+            site_admin: true,
+        };
+
+        let user: GitHubUser = api.into();
+        assert_eq!(user.id, 7);
+        assert_eq!(user.login, "alice");
+        assert_eq!(user.email, "alice@test.com");
+        assert!(user.site_admin);
+    }
+
+    #[test]
+    fn github_user_from_api_user_defaults_empty_email() {
+        let api = GitHubApiUser {
+            id: 8,
+            login: "bob".to_string(),
+            email: None,
+            avatar_url: "https://avatars/b".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        };
+
+        let user: GitHubUser = api.into();
+        assert_eq!(user.email, "");
+        assert!(!user.site_admin);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorPage<T> {
     pub data: Vec<T>,

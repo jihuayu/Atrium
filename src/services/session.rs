@@ -99,3 +99,214 @@ fn parse_sqlite_datetime(value: &str) -> Option<i64> {
         .ok()
         .map(|v| v.timestamp())
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "server")]
+    use std::collections::HashMap;
+
+    #[cfg(feature = "server")]
+    use async_trait::async_trait;
+    #[cfg(feature = "server")]
+    use bytes::Bytes;
+
+    use super::parse_sqlite_datetime;
+
+    #[cfg(feature = "server")]
+    use crate::{
+        auth::{HttpClient, UpstreamResponse},
+        db::{Database, DbValue},
+        types::GitHubApiUser,
+        AppContext,
+    };
+
+    #[test]
+    fn parse_rfc3339_datetime() {
+        let ts = parse_sqlite_datetime("2025-01-15T08:00:00Z").expect("must parse");
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn parse_sqlite_plain_datetime() {
+        let ts = parse_sqlite_datetime("2025-01-15 08:00:00").expect("must parse");
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn reject_invalid_datetime() {
+        assert!(parse_sqlite_datetime("not-a-time").is_none());
+    }
+
+    #[cfg(feature = "server")]
+    struct NoopHttp;
+
+    #[cfg(feature = "server")]
+    #[async_trait]
+    impl HttpClient for NoopHttp {
+        async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
+            Err(crate::error::ApiError::internal("not used"))
+        }
+
+        async fn get_jwks(&self, _url: &str) -> crate::Result<UpstreamResponse> {
+            Err(crate::error::ApiError::internal("not used"))
+        }
+
+        async fn post_utterances_token(
+            &self,
+            _body: &[u8],
+            _headers: &HashMap<String, String>,
+        ) -> crate::Result<UpstreamResponse> {
+            Ok(UpstreamResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Bytes::new(),
+            })
+        }
+    }
+
+    #[cfg(feature = "server")]
+    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
+        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("db init");
+        (db_file, db)
+    }
+
+    #[cfg(feature = "server")]
+    async fn insert_user(db: &dyn Database, id: i64, login: &str) {
+        db.execute(
+            "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+            &[
+                DbValue::Integer(id),
+                DbValue::Text(login.to_string()),
+                DbValue::Text(format!("{}@test.com", login)),
+                DbValue::Text("https://avatars/x".to_string()),
+                DbValue::Text("User".to_string()),
+                DbValue::Integer(0),
+            ],
+        )
+        .await
+        .expect("insert user");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn create_and_validate_session_success() {
+        let (_db_file, db) = make_db().await;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        insert_user(&db, 1, "alice").await;
+
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: true,
+            test_bypass_secret: None,
+        };
+
+        super::create_session(&ctx, "refresh-1", 1, 3600)
+            .await
+            .expect("create");
+        super::validate_session(&ctx, "refresh-1", 1)
+            .await
+            .expect("validate");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn validate_session_rejects_wrong_user_and_revoked() {
+        let (_db_file, db) = make_db().await;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        insert_user(&db, 1, "alice").await;
+
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: true,
+            test_bypass_secret: None,
+        };
+
+        super::create_session(&ctx, "refresh-2", 1, 3600)
+            .await
+            .expect("create");
+
+        let wrong_user = super::validate_session(&ctx, "refresh-2", 2)
+            .await
+            .err()
+            .expect("wrong user must fail");
+        assert_eq!(wrong_user.status, 401);
+
+        super::revoke_session(&ctx, "refresh-2")
+            .await
+            .expect("revoke");
+        let revoked = super::validate_session(&ctx, "refresh-2", 1)
+            .await
+            .err()
+            .expect("revoked must fail");
+        assert_eq!(revoked.status, 401);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn validate_session_rejects_expired_and_revoke_user_sessions() {
+        let (_db_file, db) = make_db().await;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        insert_user(&db, 1, "alice").await;
+
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: true,
+            test_bypass_secret: None,
+        };
+
+        super::create_session(&ctx, "refresh-3", 1, 3600)
+            .await
+            .expect("create");
+        db.execute(
+            "UPDATE sessions SET expires_at = datetime('now', '-1 seconds') WHERE refresh_token_hash = ?1",
+            &[DbValue::Text(crate::auth::hash_token("refresh-3"))],
+        )
+        .await
+        .expect("expire session");
+        let expired = super::validate_session(&ctx, "refresh-3", 1)
+            .await
+            .err()
+            .expect("expired must fail");
+        assert_eq!(expired.status, 401);
+
+        super::create_session(&ctx, "refresh-4", 1, 3600)
+            .await
+            .expect("create second");
+        super::revoke_user_sessions(&ctx, 1)
+            .await
+            .expect("revoke user sessions");
+        let revoked = super::validate_session(&ctx, "refresh-4", 1)
+            .await
+            .err()
+            .expect("revoked must fail");
+        assert_eq!(revoked.status, 401);
+    }
+}
