@@ -14,7 +14,7 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    auth::{bearer_from_header, resolve_user},
+    auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
     router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     types::GitHubUser,
     ApiError, AppContext, Result,
@@ -30,6 +30,9 @@ pub struct AppState {
     pub router: Arc<AppRouter>,
     pub base_url: String,
     pub token_cache_ttl: i64,
+    pub jwt_secret: Vec<u8>,
+    pub google_client_id: Option<String>,
+    pub apple_app_id: Option<String>,
 }
 
 pub async fn build_app(
@@ -38,6 +41,9 @@ pub async fn build_app(
     token_cache_ttl: i64,
     cache_max_issues: u64,
     cache_ttl_secs: u64,
+    jwt_secret: Vec<u8>,
+    google_client_id: Option<String>,
+    apple_app_id: Option<String>,
 ) -> Result<Router> {
     let db = Arc::new(SqliteDatabase::connect_and_migrate(database_url).await?);
     let http = Arc::new(ReqwestHttpClient::new()?);
@@ -50,6 +56,9 @@ pub async fn build_app(
         router: Arc::new(AppRouter::new()),
         base_url,
         token_cache_ttl,
+        jwt_secret,
+        google_client_id,
+        apple_app_id,
     };
 
     let app = Router::new().fallback(dispatch).with_state(state).layer(
@@ -99,13 +108,17 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         body,
     };
 
-    let user = resolve_request_user(app_req.auth_header.as_deref(), &state).await?;
+    let user = resolve_request_user(&app_req.path, app_req.auth_header.as_deref(), &state).await?;
     let ctx = AppContext {
         db: state.db.as_ref(),
         http: state.http.as_ref(),
         comment_cache: Some(state.cache.as_ref()),
         base_url: &state.base_url,
         user: user.as_ref(),
+        jwt_secret: &state.jwt_secret,
+        google_client_id: state.google_client_id.as_deref(),
+        apple_app_id: state.apple_app_id.as_deref(),
+        stateful_sessions: true,
     };
 
     let app_response = state.router.handle(app_req, &ctx).await;
@@ -113,14 +126,23 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
 }
 
 async fn resolve_request_user(
+    path: &str,
     auth_header: Option<&str>,
     state: &AppState,
 ) -> Result<Option<GitHubUser>> {
+    if path.starts_with("/api/v1/auth/") {
+        return Ok(None);
+    }
+
+    if path.starts_with("/api/v1/") {
+        return resolve_xtalk_jwt_user(state.db.as_ref(), auth_header, &state.jwt_secret).await;
+    }
+
     let token = bearer_from_header(auth_header)?;
     match token {
         None => Ok(None),
         Some(token) => {
-            let user = resolve_user(
+            let user = resolve_github_user(
                 state.db.as_ref(),
                 state.http.as_ref(),
                 &token,

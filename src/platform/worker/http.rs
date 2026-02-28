@@ -123,4 +123,38 @@ impl HttpClient for WorkerHttpClient {
             body: bytes::Bytes::from(body),
         })
     }
+
+    async fn get_jwks(&self, url: &str) -> Result<UpstreamResponse> {
+        let request_headers = Headers::new();
+        request_headers
+            .set("Accept", "application/json")
+            .map_err(|e| ApiError::internal(format!("set accept header failed: {}", e)))?;
+
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get).with_headers(request_headers);
+
+        let request = Request::new_with_init(url, &init)
+            .map_err(|e| ApiError::internal(format!("build jwks request failed: {}", e)))?;
+        let mut response = Fetch::Request(request)
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("jwks fetch failed: {}", e)))?;
+
+        let status = response.status_code();
+        let mut response_headers = Vec::new();
+        if let Some(value) = response.headers().get("Cache-Control").ok().flatten() {
+            response_headers.push(("Cache-Control".to_string(), value));
+        }
+
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal(format!("read jwks response failed: {}", e)))?;
+
+        Ok(UpstreamResponse {
+            status,
+            headers: response_headers,
+            body: bytes::Bytes::from(body),
+        })
+    }
 }

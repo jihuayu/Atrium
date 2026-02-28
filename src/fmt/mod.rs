@@ -1,3 +1,4 @@
+pub mod api;
 pub mod comment;
 pub mod issue;
 pub mod pagination;

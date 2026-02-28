@@ -9,6 +9,8 @@ cwd = "../.."
 [vars]
 BASE_URL = "https://xtalk.raw2.cc"
 TOKEN_CACHE_TTL = "3600"
+GOOGLE_CLIENT_ID = ""
+APPLE_APP_ID = ""
 
 [[d1_databases]]
 binding = "DB"

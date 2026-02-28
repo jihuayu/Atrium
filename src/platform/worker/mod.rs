@@ -2,7 +2,7 @@ pub mod d1;
 pub mod http;
 
 use crate::{
-    auth::{bearer_from_header, resolve_user},
+    auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
     router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     AppContext,
 };
@@ -13,6 +13,9 @@ use self::{d1::D1Db, http::WorkerHttpClient};
 pub struct WorkerState {
     pub base_url: String,
     pub token_cache_ttl: i64,
+    pub jwt_secret: Vec<u8>,
+    pub google_client_id: Option<String>,
+    pub apple_app_id: Option<String>,
 }
 
 impl WorkerState {
@@ -26,10 +29,23 @@ impl WorkerState {
             .ok()
             .and_then(|v| v.to_string().parse::<i64>().ok())
             .unwrap_or(3600);
+        let jwt_secret = env
+            .secret("JWT_SECRET")
+            .map(|v| parse_secret_bytes(&v.to_string()))
+            .or_else(|_| {
+                env.var("JWT_SECRET")
+                    .map(|v| parse_secret_bytes(&v.to_string()))
+            })
+            .unwrap_or_else(|_| b"xtalk-dev-secret-change-me".to_vec());
+        let google_client_id = env.var("GOOGLE_CLIENT_ID").ok().map(|v| v.to_string());
+        let apple_app_id = env.var("APPLE_APP_ID").ok().map(|v| v.to_string());
 
         Self {
             base_url,
             token_cache_ttl,
+            jwt_secret,
+            google_client_id,
+            apple_app_id,
         }
     }
 }
@@ -67,10 +83,18 @@ async fn dispatch(
     };
     let http = WorkerHttpClient;
 
-    let token = bearer_from_header(app_req.auth_header.as_deref())?;
-    let user = match token {
-        None => None,
-        Some(token) => Some(resolve_user(&db, &http, &token, state.token_cache_ttl).await?),
+    let user = if app_req.path.starts_with("/api/v1/auth/") {
+        None
+    } else if app_req.path.starts_with("/api/v1/") {
+        resolve_xtalk_jwt_user(&db, app_req.auth_header.as_deref(), &state.jwt_secret).await?
+    } else {
+        let token = bearer_from_header(app_req.auth_header.as_deref())?;
+        match token {
+            None => None,
+            Some(token) => {
+                Some(resolve_github_user(&db, &http, &token, state.token_cache_ttl).await?)
+            }
+        }
     };
 
     let ctx = AppContext {
@@ -79,6 +103,10 @@ async fn dispatch(
         comment_cache: None,
         base_url: &state.base_url,
         user: user.as_ref(),
+        jwt_secret: &state.jwt_secret,
+        google_client_id: state.google_client_id.as_deref(),
+        apple_app_id: state.apple_app_id.as_deref(),
+        stateful_sessions: false,
     };
 
     Ok(router.handle(app_req, &ctx).await)
@@ -156,4 +184,12 @@ fn add_cors(mut response: Response) -> Result<Response> {
     )?;
     h.set("Access-Control-Expose-Headers", "Link")?;
     Ok(response)
+}
+
+fn parse_secret_bytes(value: &str) -> Vec<u8> {
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
+        .or_else(|_| {
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, value)
+        })
+        .unwrap_or_else(|_| value.as_bytes().to_vec())
 }

@@ -21,6 +21,22 @@ impl SqliteDatabase {
             .await
             .map_err(|e| ApiError::internal(format!("migration failed: {}", e)))?;
 
+        let has_user_identities: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_identities' LIMIT 1",
+        )
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("check migration state failed: {}", e)))?;
+
+        if has_user_identities.is_none() {
+            sqlx::query(include_str!(
+                "../../../migrations/0002_multi_provider_auth.sql"
+            ))
+            .execute(&pool)
+            .await
+            .map_err(|e| ApiError::internal(format!("migration 0002 failed: {}", e)))?;
+        }
+
         Ok(Self { pool })
     }
 

@@ -64,6 +64,21 @@ impl ApiError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(500, message)
     }
+
+    pub fn to_native_response(&self) -> serde_json::Value {
+        let error = match self.status {
+            400 => "bad_request",
+            401 => "unauthorized",
+            403 => "forbidden",
+            404 => "not_found",
+            422 => "validation_failed",
+            _ => "internal_error",
+        };
+        serde_json::json!({
+            "error": error,
+            "message": self.body.message,
+        })
+    }
 }
 
 impl std::fmt::Display for ApiError {

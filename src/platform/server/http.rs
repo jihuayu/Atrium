@@ -117,4 +117,35 @@ impl HttpClient for ReqwestHttpClient {
             body,
         })
     }
+
+    async fn get_jwks(&self, url: &str) -> Result<UpstreamResponse> {
+        let response = self
+            .client
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("jwks request failed: {}", e)))?;
+
+        let status = response.status().as_u16();
+        let mut response_headers = Vec::new();
+        if let Some(value) = response
+            .headers()
+            .get("Cache-Control")
+            .and_then(|v| v.to_str().ok())
+        {
+            response_headers.push(("Cache-Control".to_string(), value.to_string()));
+        }
+
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal(format!("read jwks response failed: {}", e)))?;
+
+        Ok(UpstreamResponse {
+            status,
+            headers: response_headers,
+            body,
+        })
+    }
 }

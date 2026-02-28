@@ -35,6 +35,8 @@ impl From<GitHubApiUser> for GitHubUser {
     }
 }
 
+pub type AuthUser = GitHubUser;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiUser {
     pub login: String,
@@ -213,6 +215,145 @@ pub struct RepoRow {
     pub name: String,
     pub admin_user_id: Option<i64>,
     pub issue_counter: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtClaims {
+    pub sub: String,
+    pub login: String,
+    pub iss: String,
+    pub iat: i64,
+    pub exp: i64,
+    pub jti: String,
+    #[serde(default)]
+    pub token_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderUser {
+    pub provider: String,
+    pub provider_user_id: String,
+    pub login: String,
+    pub email: String,
+    pub avatar_url: String,
+    pub r#type: String,
+    pub site_admin: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderTokenInput {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthTokenResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: i64,
+    pub token_type: String,
+    pub user: NativeUser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeUser {
+    pub id: i64,
+    pub login: String,
+    pub avatar_url: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeLabel {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NativeReactionSummary {
+    #[serde(rename = "+1")]
+    pub plus_one: i64,
+    #[serde(rename = "-1")]
+    pub minus_one: i64,
+    pub laugh: i64,
+    pub confused: i64,
+    pub heart: i64,
+    pub hooray: i64,
+    pub rocket: i64,
+    pub eyes: i64,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeThreadResponse {
+    pub id: i64,
+    pub number: i64,
+    pub title: String,
+    pub body: String,
+    pub body_html: String,
+    pub state: String,
+    pub comment_count: i64,
+    pub author: NativeUser,
+    pub labels: Vec<NativeLabel>,
+    pub reactions: NativeReactionSummary,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeCommentResponse {
+    pub id: i64,
+    pub body: String,
+    pub body_html: String,
+    pub author: NativeUser,
+    pub reactions: NativeReactionSummary,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPagination {
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPage<T> {
+    pub data: Vec<T>,
+    pub pagination: CursorPagination,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NativeListQuery {
+    pub state: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+    pub direction: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NativeCommentListQuery {
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefreshTokenInput {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeRepoSettings {
+    pub owner: String,
+    pub name: String,
+    pub admin_user_id: Option<i64>,
+    pub issue_counter: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateRepoSettingsInput {
+    pub admin_user_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

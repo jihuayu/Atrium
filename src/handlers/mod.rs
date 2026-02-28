@@ -1,3 +1,4 @@
+pub mod api;
 pub mod comments;
 pub mod exports;
 pub mod issues;

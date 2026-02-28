@@ -54,6 +54,29 @@ impl AppResponse {
 
 #[derive(Clone)]
 enum Route {
+    ApiAuthGithub,
+    ApiAuthGoogle,
+    ApiAuthApple,
+    ApiAuthRefresh,
+    ApiAuthSessionDelete,
+    ApiAuthMe,
+    ApiListThreads,
+    ApiCreateThread,
+    ApiGetThread,
+    ApiUpdateThread,
+    ApiDeleteThread,
+    ApiListComments,
+    ApiCreateComment,
+    ApiGetComment,
+    ApiUpdateComment,
+    ApiDeleteComment,
+    ApiCreateReaction,
+    ApiDeleteReaction,
+    ApiListLabels,
+    ApiCreateLabel,
+    ApiDeleteLabel,
+    ApiGetRepoSettings,
+    ApiUpdateRepoSettings,
     ListIssues,
     CreateIssue,
     GetIssue,
@@ -99,6 +122,46 @@ impl AppRouter {
 
         router
             .get
+            .insert("/api/v1/auth/me", Route::ApiAuthMe)
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads",
+                Route::ApiListThreads,
+            )
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads/{number}",
+                Route::ApiGetThread,
+            )
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads/{number}/comments",
+                Route::ApiListComments,
+            )
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/comments/{id}",
+                Route::ApiGetComment,
+            )
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/repos/{owner}/{repo}/labels", Route::ApiListLabels)
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/repos/{owner}/{repo}", Route::ApiGetRepoSettings)
+            .unwrap();
+        router
+            .get
             .insert(
                 "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
                 Route::ListReactions,
@@ -142,6 +205,47 @@ impl AppRouter {
 
         router
             .post
+            .insert("/api/v1/auth/github", Route::ApiAuthGithub)
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/auth/google", Route::ApiAuthGoogle)
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/auth/apple", Route::ApiAuthApple)
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/auth/refresh", Route::ApiAuthRefresh)
+            .unwrap();
+        router
+            .post
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads",
+                Route::ApiCreateThread,
+            )
+            .unwrap();
+        router
+            .post
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads/{number}/comments",
+                Route::ApiCreateComment,
+            )
+            .unwrap();
+        router
+            .post
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/comments/{id}/reactions",
+                Route::ApiCreateReaction,
+            )
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/repos/{owner}/{repo}/labels", Route::ApiCreateLabel)
+            .unwrap();
+        router
+            .post
             .insert(
                 "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
                 Route::CreateReaction,
@@ -178,6 +282,24 @@ impl AppRouter {
         router
             .patch
             .insert(
+                "/api/v1/repos/{owner}/{repo}/threads/{number}",
+                Route::ApiUpdateThread,
+            )
+            .unwrap();
+        router
+            .patch
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/comments/{id}",
+                Route::ApiUpdateComment,
+            )
+            .unwrap();
+        router
+            .patch
+            .insert("/api/v1/repos/{owner}/{repo}", Route::ApiUpdateRepoSettings)
+            .unwrap();
+        router
+            .patch
+            .insert(
                 "/repos/{owner}/{repo}/issues/comments/{id}",
                 Route::UpdateComment,
             )
@@ -187,6 +309,38 @@ impl AppRouter {
             .insert("/repos/{owner}/{repo}/issues/{number}", Route::UpdateIssue)
             .unwrap();
 
+        router
+            .delete
+            .insert("/api/v1/auth/session", Route::ApiAuthSessionDelete)
+            .unwrap();
+        router
+            .delete
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/threads/{number}",
+                Route::ApiDeleteThread,
+            )
+            .unwrap();
+        router
+            .delete
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/comments/{id}",
+                Route::ApiDeleteComment,
+            )
+            .unwrap();
+        router
+            .delete
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/comments/{id}/reactions/{content}",
+                Route::ApiDeleteReaction,
+            )
+            .unwrap();
+        router
+            .delete
+            .insert(
+                "/api/v1/repos/{owner}/{repo}/labels/{name}",
+                Route::ApiDeleteLabel,
+            )
+            .unwrap();
         router
             .delete
             .insert(
@@ -235,6 +389,29 @@ impl AppRouter {
             .collect();
 
         match matched.value {
+            Route::ApiAuthGithub => handlers::api::auth::github(req, ctx).await,
+            Route::ApiAuthGoogle => handlers::api::auth::google(req, ctx).await,
+            Route::ApiAuthApple => handlers::api::auth::apple(req, ctx).await,
+            Route::ApiAuthRefresh => handlers::api::auth::refresh(req, ctx).await,
+            Route::ApiAuthSessionDelete => handlers::api::auth::session_delete(req, ctx).await,
+            Route::ApiAuthMe => handlers::api::auth::me(req, ctx).await,
+            Route::ApiListThreads => handlers::api::threads::list(req, ctx).await,
+            Route::ApiCreateThread => handlers::api::threads::create(req, ctx).await,
+            Route::ApiGetThread => handlers::api::threads::get(req, ctx).await,
+            Route::ApiUpdateThread => handlers::api::threads::update(req, ctx).await,
+            Route::ApiDeleteThread => handlers::api::threads::delete(req, ctx).await,
+            Route::ApiListComments => handlers::api::comments::list(req, ctx).await,
+            Route::ApiCreateComment => handlers::api::comments::create(req, ctx).await,
+            Route::ApiGetComment => handlers::api::comments::get(req, ctx).await,
+            Route::ApiUpdateComment => handlers::api::comments::update(req, ctx).await,
+            Route::ApiDeleteComment => handlers::api::comments::delete(req, ctx).await,
+            Route::ApiCreateReaction => handlers::api::reactions::create(req, ctx).await,
+            Route::ApiDeleteReaction => handlers::api::reactions::delete(req, ctx).await,
+            Route::ApiListLabels => handlers::api::labels::list(req, ctx).await,
+            Route::ApiCreateLabel => handlers::api::labels::create(req, ctx).await,
+            Route::ApiDeleteLabel => handlers::api::labels::delete(req, ctx).await,
+            Route::ApiGetRepoSettings => handlers::api::admin::get(req, ctx).await,
+            Route::ApiUpdateRepoSettings => handlers::api::admin::update(req, ctx).await,
             Route::ListIssues => handlers::issues::list(req, ctx).await,
             Route::CreateIssue => handlers::issues::create(req, ctx).await,
             Route::GetIssue => handlers::issues::get(req, ctx).await,
@@ -307,5 +484,17 @@ mod tests {
         );
         let export = router.get.at("/user/export");
         assert!(export.is_ok(), "export route error: {:?}", export.err());
+        let api_threads = router.get.at("/api/v1/repos/jihuayu/utterances/threads");
+        assert!(
+            api_threads.is_ok(),
+            "api threads route error: {:?}",
+            api_threads.err()
+        );
+        let api_auth = router.post.at("/api/v1/auth/github");
+        assert!(
+            api_auth.is_ok(),
+            "api auth route error: {:?}",
+            api_auth.err()
+        );
     }
 }
