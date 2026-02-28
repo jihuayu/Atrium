@@ -354,8 +354,165 @@ fn parse_max_age(headers: &[(String, String)]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aud_matches, parse_jwt_parts, parse_max_age};
+    use std::{collections::HashMap, sync::atomic::{AtomicUsize, Ordering}};
+
+    use async_trait::async_trait;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use bytes::Bytes;
+    use p256::ecdsa::{Signature as EcRawSignature, SigningKey as EcSigningKey};
+    use rand::rngs::OsRng;
+    use rsa::{pkcs1v15::SigningKey as RsaSigningKey, traits::PublicKeyParts, RsaPrivateKey};
+    use sha2::Sha256;
+
+    use crate::{
+        auth::{HttpClient, UpstreamResponse},
+        error::ApiError,
+        types::GitHubApiUser,
+    };
+
+    use super::{
+        aud_matches, parse_jwt_parts, parse_max_age, verify_provider_id_token, verify_signature,
+        JwkKey,
+    };
+
+    #[cfg(feature = "server")]
+    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
+        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("db init");
+        (db_file, db)
+    }
+
+    struct MockHttp {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Bytes,
+        calls: AtomicUsize,
+    }
+
+    impl MockHttp {
+        fn jwks_ok(jwks_json: String) -> Self {
+            Self {
+                status: 200,
+                headers: vec![("Cache-Control".to_string(), "max-age=120".to_string())],
+                body: Bytes::from(jwks_json),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn jwks_fail() -> Self {
+            Self {
+                status: 500,
+                headers: Vec::new(),
+                body: Bytes::new(),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl HttpClient for MockHttp {
+        async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn get_jwks(&self, _url: &str) -> crate::Result<UpstreamResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(UpstreamResponse {
+                status: self.status,
+                headers: self.headers.clone(),
+                body: self.body.clone(),
+            })
+        }
+
+        async fn post_utterances_token(
+            &self,
+            _body: &[u8],
+            _headers: &HashMap<String, String>,
+        ) -> crate::Result<UpstreamResponse> {
+            Err(ApiError::internal("not used"))
+        }
+    }
+
+    fn rsa_jwk_and_token(
+        kid: &str,
+        sub: &str,
+        aud: serde_json::Value,
+        iss: &str,
+        exp: i64,
+    ) -> (String, String) {
+        use rsa::signature::{SignatureEncoding, Signer};
+
+        let mut rng = OsRng;
+        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa keygen");
+        let public = private.to_public_key();
+
+        let n = URL_SAFE_NO_PAD.encode(public.n().to_bytes_be());
+        let e = URL_SAFE_NO_PAD.encode(public.e().to_bytes_be());
+        let jwks = serde_json::json!({
+            "keys": [{
+                "kid": kid,
+                "alg": "RS256",
+                "kty": "RSA",
+                "n": n,
+                "e": e
+            }]
+        })
+        .to_string();
+
+        let header_b64 = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({"alg": "RS256", "kid": kid}))
+                .expect("header"),
+        );
+        let payload_b64 = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "sub": sub,
+                "email": "u@test.com",
+                "picture": "https://avatars/u",
+                "iss": iss,
+                "exp": exp,
+                "aud": aud
+            }))
+            .expect("payload"),
+        );
+        let signing_input = format!("{}.{}", header_b64, payload_b64);
+        let signing_key = RsaSigningKey::<Sha256>::new(private);
+        let signature = signing_key.sign(signing_input.as_bytes()).to_vec();
+        let token = format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature));
+
+        (jwks, token)
+    }
+
+    fn ec_jwk_and_signature(msg: &[u8]) -> (JwkKey, Vec<u8>) {
+        use p256::ecdsa::signature::{Signer, SignatureEncoding};
+
+        let signing = EcSigningKey::from_slice(&[7u8; 32]).expect("ec key");
+        let verify = signing.verifying_key();
+        let point = verify.to_encoded_point(false);
+        let x = URL_SAFE_NO_PAD.encode(point.x().expect("x"));
+        let y = URL_SAFE_NO_PAD.encode(point.y().expect("y"));
+        let sig: EcRawSignature = signing.sign(msg);
+        let sig = sig.to_vec();
+
+        (
+            JwkKey {
+                kid: Some("ec-1".to_string()),
+                alg: Some("ES256".to_string()),
+                kty: "EC".to_string(),
+                n: None,
+                e: None,
+                x: Some(x),
+                y: Some(y),
+            },
+            sig,
+        )
+    }
 
     fn make_jwt(header: serde_json::Value, payload: serde_json::Value) -> String {
         let h = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header json"));
@@ -414,6 +571,173 @@ mod tests {
     #[test]
     fn parse_jwt_parts_rejects_bad_shape() {
         let err = parse_jwt_parts("a.b").err().expect("must fail");
+        assert_eq!(err.status, 401);
+    }
+
+    #[test]
+    fn verify_signature_supports_rs256_and_es256() {
+        use rsa::signature::{SignatureEncoding, Signer};
+
+        let message = b"header.payload";
+
+        let mut rng = OsRng;
+        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa keygen");
+        let public = private.to_public_key();
+        let key = JwkKey {
+            kid: Some("k1".to_string()),
+            alg: Some("RS256".to_string()),
+            kty: "RSA".to_string(),
+            n: Some(URL_SAFE_NO_PAD.encode(public.n().to_bytes_be())),
+            e: Some(URL_SAFE_NO_PAD.encode(public.e().to_bytes_be())),
+            x: None,
+            y: None,
+        };
+        let rsa_sig = RsaSigningKey::<Sha256>::new(private).sign(message).to_vec();
+        verify_signature("RS256", &key, "header.payload", &rsa_sig).expect("rsa verify ok");
+
+        let (ec_key, ec_sig) = ec_jwk_and_signature(message);
+        verify_signature("ES256", &ec_key, "header.payload", &ec_sig).expect("ec verify ok");
+
+        let err = verify_signature("HS256", &ec_key, "header.payload", &ec_sig)
+            .err()
+            .expect("unsupported alg");
+        assert_eq!(err.status, 401);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn verify_provider_id_token_success_and_cache() {
+        let (_db_file, db) = make_db().await;
+        let now = chrono::Utc::now().timestamp();
+        let (jwks, token) = rsa_jwk_and_token(
+            "k-success",
+            "user-1",
+            serde_json::json!("client-1"),
+            "https://issuer.test",
+            now + 3600,
+        );
+        let http = MockHttp::jwks_ok(jwks);
+
+        let user = verify_provider_id_token(
+            &db,
+            &http,
+            &token,
+            "provider_success",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .expect("verify ok");
+        assert_eq!(user.provider_user_id, "user-1");
+        assert_eq!(user.email, "u@test.com");
+
+        let _ = verify_provider_id_token(
+            &db,
+            &http,
+            &token,
+            "provider_success",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .expect("verify cached ok");
+        assert!(http.calls() >= 1);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn verify_provider_id_token_rejects_aud_iss_exp_and_http_failure() {
+        let (_db_file, db) = make_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        let (jwks_bad_aud, token_bad_aud) = rsa_jwk_and_token(
+            "k-aud",
+            "user-2",
+            serde_json::json!("other-client"),
+            "https://issuer.test",
+            now + 3600,
+        );
+        let http_bad_aud = MockHttp::jwks_ok(jwks_bad_aud);
+        let err = verify_provider_id_token(
+            &db,
+            &http_bad_aud,
+            &token_bad_aud,
+            "provider_bad_aud",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .err()
+        .expect("aud mismatch");
+        assert_eq!(err.status, 401);
+
+        let (jwks_bad_iss, token_bad_iss) = rsa_jwk_and_token(
+            "k-iss",
+            "user-3",
+            serde_json::json!("client-1"),
+            "https://wrong-issuer.test",
+            now + 3600,
+        );
+        let http_bad_iss = MockHttp::jwks_ok(jwks_bad_iss);
+        let err = verify_provider_id_token(
+            &db,
+            &http_bad_iss,
+            &token_bad_iss,
+            "provider_bad_iss",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .err()
+        .expect("iss mismatch");
+        assert_eq!(err.status, 401);
+
+        let (jwks_expired, token_expired) = rsa_jwk_and_token(
+            "k-exp",
+            "user-4",
+            serde_json::json!("client-1"),
+            "https://issuer.test",
+            now - 1,
+        );
+        let http_expired = MockHttp::jwks_ok(jwks_expired);
+        let err = verify_provider_id_token(
+            &db,
+            &http_expired,
+            &token_expired,
+            "provider_expired",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .err()
+        .expect("expired");
+        assert_eq!(err.status, 401);
+
+        let (_jwks_unused, token_any) = rsa_jwk_and_token(
+            "k-http",
+            "user-5",
+            serde_json::json!("client-1"),
+            "https://issuer.test",
+            now + 3600,
+        );
+        let http_fail = MockHttp::jwks_fail();
+        let err = verify_provider_id_token(
+            &db,
+            &http_fail,
+            &token_any,
+            "provider_http_fail",
+            "https://jwks.test",
+            "https://issuer.test",
+            Some("client-1"),
+        )
+        .await
+        .err()
+        .expect("http fail");
         assert_eq!(err.status, 401);
     }
 }
