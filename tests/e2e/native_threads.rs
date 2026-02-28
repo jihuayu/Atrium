@@ -51,3 +51,78 @@ async fn native_threads_shape_and_cursor_pagination() {
     }
     assert_eq!(ids.len(), data1.len() + data2.len());
 }
+
+#[tokio::test]
+async fn native_threads_auth_and_permission_branches() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-threads-perm";
+
+    fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "admin seed").await;
+
+    let unauth_create = app
+        .as_anon()
+        .post(&app.url(&format!("/api/v1/repos/{}/{}/threads", owner, repo)))
+        .json(&serde_json::json!({"title": "unauth"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_create.status(), 401);
+
+    let created = app
+        .as_alice()
+        .post(&app.url(&format!("/api/v1/repos/{}/{}/threads", owner, repo)))
+        .json(&serde_json::json!({"title": "alice thread", "body": "hello"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created_body: serde_json::Value = created.json().await.unwrap();
+    let number = created_body["number"].as_i64().unwrap();
+
+    let bob_patch = app
+        .as_bob()
+        .patch(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}",
+            owner, repo, number
+        )))
+        .json(&serde_json::json!({"title": "bob edit"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bob_patch.status(), 403);
+
+    let alice_patch = app
+        .as_alice()
+        .patch(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}",
+            owner, repo, number
+        )))
+        .json(&serde_json::json!({"title": "alice edit"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(alice_patch.status(), 200);
+
+    let alice_delete = app
+        .as_alice()
+        .delete(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}",
+            owner, repo, number
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(alice_delete.status(), 403);
+
+    let admin_delete = app
+        .as_admin()
+        .delete(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}",
+            owner, repo, number
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(admin_delete.status(), 204);
+}

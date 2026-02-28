@@ -97,3 +97,34 @@ async fn native_export_since_filters_old_records() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["threads"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn native_export_validates_query_params() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-export-params";
+
+    let _ = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "thread").await;
+
+    let bad_format = app
+        .as_admin()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/export?format=xml",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_format.status(), 400);
+
+    let bad_since = app
+        .as_admin()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/export?since=not-a-time",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_since.status(), 400);
+}

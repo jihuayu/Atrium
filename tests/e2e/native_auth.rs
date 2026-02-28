@@ -77,3 +77,33 @@ async fn native_auth_wrong_bypass_secret_falls_back_to_401() {
     let body: serde_json::Value = ok.json().await.unwrap();
     assert_eq!(body["login"], "admin");
 }
+
+#[tokio::test]
+async fn native_auth_refresh_and_session_delete_require_valid_token() {
+    let app = TestApp::start().await;
+
+    let refresh_no_token = app
+        .as_anon()
+        .post(&app.url("/api/v1/auth/refresh"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refresh_no_token.status(), 401);
+
+    let refresh_bad_token = app
+        .as_anon()
+        .post(&app.url("/api/v1/auth/refresh"))
+        .json(&serde_json::json!({"refresh_token": "invalid.token.value"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refresh_bad_token.status(), 401);
+
+    let delete_no_token = app
+        .as_anon()
+        .delete(&app.url("/api/v1/auth/session"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_no_token.status(), 401);
+}

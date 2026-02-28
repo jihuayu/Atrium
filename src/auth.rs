@@ -295,6 +295,7 @@ async fn unique_login(db: &dyn Database, preferred: &str) -> Result<String> {
 
     #[derive(Debug, Deserialize)]
     struct ExistsRow {
+        #[serde(rename = "hit")]
         _hit: i64,
     }
 

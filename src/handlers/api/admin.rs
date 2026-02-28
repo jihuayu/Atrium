@@ -83,6 +83,7 @@ async fn ensure_repo_admin(
 async fn ensure_user_exists(ctx: &AppContext<'_>, user_id: i64) -> crate::Result<()> {
     #[derive(Debug, Deserialize)]
     struct UserIdRow {
+        #[serde(rename = "id")]
         _id: i64,
     }
 

@@ -122,10 +122,7 @@ impl AppRouter {
             delete: matchit::Router::new(),
         };
 
-        router
-            .get
-            .insert("/", Route::Root)
-            .unwrap();
+        router.get.insert("/", Route::Root).unwrap();
         router
             .get
             .insert("/api/v1/auth/me", Route::ApiAuthMe)

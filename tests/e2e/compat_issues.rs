@@ -59,3 +59,43 @@ async fn compat_patch_forbidden_for_non_author() {
     let body: serde_json::Value = patch_ok.json().await.unwrap();
     assert_eq!(body["title"], "alice edit");
 }
+
+#[tokio::test]
+async fn compat_issue_close_and_soft_delete_behaviors() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "compat-issues-close-delete";
+
+    let number = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "close me").await;
+
+    let close = app
+        .as_admin()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, number)))
+        .json(&serde_json::json!({"state": "closed"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(close.status(), 200);
+    let close_body: serde_json::Value = close.json().await.unwrap();
+    assert_eq!(close_body["state"], "closed");
+    assert!(close_body["closed_at"].as_str().is_some());
+
+    let del = app
+        .as_admin()
+        .delete(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}",
+            owner, repo, number
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), 204);
+
+    let get_after_delete = app
+        .as_anon()
+        .get(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, number)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get_after_delete.status(), 404);
+}
