@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::{types::CommentResponse, Result};
 
-#[cfg_attr(feature = "worker", async_trait(?Send))]
-#[cfg_attr(not(feature = "worker"), async_trait)]
+#[cfg_attr(feature = "server", async_trait)]
+#[cfg_attr(not(feature = "server"), async_trait(?Send))]
 pub trait CommentCacheStore: Send + Sync {
     async fn get_list(
         &self,

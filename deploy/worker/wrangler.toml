@@ -1,16 +1,22 @@
-name = "xtalk"
+name = "atrium"
 main = "../../build/worker/shim.mjs"
 compatibility_date = "2024-09-23"
 
 [build]
-command = "cargo install -q worker-build && worker-build --release --features worker"
+command = "cargo install -q worker-build && worker-build --profile release-wasm --features worker"
 cwd = "../.."
 
 [vars]
-BASE_URL = "https://xtalk.raw2.cc"
+BASE_URL = "https://atrium.raw2.cc"
 TOKEN_CACHE_TTL = "3600"
+GOOGLE_CLIENT_ID = ""
+APPLE_APP_ID = ""
+
+# test bypass is only for local/CI e2e, do not set in production
+# ATRIUM_TEST_BYPASS_SECRET = ""
 
 [[d1_databases]]
 binding = "DB"
-database_name = "xtalk-db"
+database_name = "atrium-db"
 database_id = "f34f0fb2-dd07-49a2-8073-4bdaf3cb02e4"
+migrations_dir = "../../migrations"

@@ -21,6 +21,22 @@ impl SqliteDatabase {
             .await
             .map_err(|e| ApiError::internal(format!("migration failed: {}", e)))?;
 
+        let has_user_identities: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_identities' LIMIT 1",
+        )
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("check migration state failed: {}", e)))?;
+
+        if has_user_identities.is_none() {
+            sqlx::query(include_str!(
+                "../../../migrations/0002_multi_provider_auth.sql"
+            ))
+            .execute(&pool)
+            .await
+            .map_err(|e| ApiError::internal(format!("migration 0002 failed: {}", e)))?;
+        }
+
         Ok(Self { pool })
     }
 
@@ -120,5 +136,115 @@ impl Database for SqliteDatabase {
             .map_err(|e| ApiError::internal(format!("commit tx failed: {}", e)))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SqliteDatabase;
+    use crate::db::{Database, DbValue};
+
+    async fn make_db() -> (tempfile::TempPath, SqliteDatabase) {
+        let db_file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("connect db");
+        (db_file, db)
+    }
+
+    #[tokio::test]
+    async fn query_and_batch_cover_value_kinds() {
+        let (_db_file, db) = make_db().await;
+        db.execute(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, i INTEGER, f REAL, s TEXT, b BLOB, n TEXT)",
+            &[],
+        )
+        .await
+        .expect("create table");
+
+        db.execute(
+            "INSERT INTO t (id, i, f, s, b, n) VALUES (1, 7, 1.5, 'txt', x'0102', NULL)",
+            &[],
+        )
+        .await
+        .expect("insert row");
+
+        let one = db
+            .query_opt_value(
+                "SELECT i, f, s, b, n FROM t WHERE id = ?1",
+                &[DbValue::Integer(1)],
+            )
+            .await
+            .expect("query one")
+            .expect("row exists");
+        assert_eq!(one["i"].as_i64(), Some(7));
+        assert_eq!(one["f"].as_f64(), Some(1.5));
+        assert_eq!(one["s"].as_str(), Some("txt"));
+        assert_eq!(one["b"].as_str(), Some("AQI="));
+        assert!(one["n"].is_null());
+
+        let null_value = db
+            .query_opt_value("SELECT ?1 AS v", &[DbValue::Null])
+            .await
+            .expect("query null")
+            .expect("row exists");
+        assert!(null_value["v"].is_null());
+
+        db.batch(vec![
+            (
+                "INSERT INTO t (id, i, f, s, b, n) VALUES (?1, ?2, ?3, ?4, x'03', NULL)",
+                vec![
+                    DbValue::Integer(2),
+                    DbValue::Integer(9),
+                    DbValue::Text("2.5".to_string()),
+                    DbValue::Text("next".to_string()),
+                ],
+            ),
+            (
+                "UPDATE t SET s = ?1 WHERE id = ?2",
+                vec![DbValue::Text("updated".to_string()), DbValue::Integer(1)],
+            ),
+        ])
+        .await
+        .expect("batch ok");
+
+        let all = db
+            .query_all_value("SELECT id, s FROM t ORDER BY id ASC", &[])
+            .await
+            .expect("query all");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0]["s"].as_str(), Some("updated"));
+    }
+
+    #[tokio::test]
+    async fn db_errors_map_to_api_error() {
+        let (_db_file, db) = make_db().await;
+
+        let exec_err = db
+            .execute("INSERT INTO missing_table(x) VALUES(1)", &[])
+            .await
+            .expect_err("execute should fail");
+        assert_eq!(exec_err.status, 500);
+
+        let opt_err = db
+            .query_opt_value("SELECT * FROM missing_table", &[])
+            .await
+            .expect_err("query_opt should fail");
+        assert_eq!(opt_err.status, 500);
+
+        let all_err = db
+            .query_all_value("SELECT * FROM missing_table", &[])
+            .await
+            .expect_err("query_all should fail");
+        assert_eq!(all_err.status, 500);
+
+        let batch_err = db
+            .batch(vec![("INSERT INTO missing_table(x) VALUES(1)", Vec::new())])
+            .await
+            .expect_err("batch should fail");
+        assert_eq!(batch_err.status, 500);
     }
 }

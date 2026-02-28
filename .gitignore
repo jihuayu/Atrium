@@ -1,1 +1,4 @@
 /target
+.wrangler.test.*.toml
+.claude
+deploy/worker/.wrangler

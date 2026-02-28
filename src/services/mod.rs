@@ -1,10 +1,13 @@
+pub mod auth;
 pub mod comment;
+pub mod cursor;
 pub mod exports;
 pub mod issue;
 pub mod label;
 pub mod reaction;
 pub mod repo;
 pub mod search;
+pub mod session;
 
 pub fn normalize_pagination(page: Option<i64>, per_page: Option<i64>) -> (i64, i64, i64) {
     let page = page.unwrap_or(1).max(1);
