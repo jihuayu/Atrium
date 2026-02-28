@@ -42,7 +42,7 @@ fn load_config_from_env() -> ServerConfig {
         base_url: env_with_fallback("ATRIUM_BASE_URL", "XTALK_BASE_URL")
             .unwrap_or_else(|| "http://localhost:3000".to_string()),
         database_url: env_with_fallback("ATRIUM_DATABASE_URL", "XTALK_DATABASE_URL")
-            .unwrap_or_else(|| "sqlite://atrium.db".to_string()),
+            .unwrap_or_else(|| "sqlite:///data/atrium.db".to_string()),
         token_cache_ttl: env_with_fallback("ATRIUM_TOKEN_CACHE_TTL", "XTALK_TOKEN_CACHE_TTL")
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(3600),
@@ -139,7 +139,7 @@ mod tests {
 
         let cfg = load_config_from_env();
         assert_eq!(cfg.base_url, "http://localhost:3000");
-        assert_eq!(cfg.database_url, "sqlite://atrium.db");
+        assert_eq!(cfg.database_url, "sqlite:///data/atrium.db");
         assert_eq!(cfg.token_cache_ttl, 3600);
         assert_eq!(cfg.cache_max_issues, 256);
         assert_eq!(cfg.cache_ttl, 60);

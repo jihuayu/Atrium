@@ -1,9 +1,16 @@
+use std::{path::Path, str::FromStr};
+
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine};
 use serde_json::{Map, Value};
-use sqlx::{sqlite::SqliteArguments, sqlite::SqliteRow, Column, Row, SqlitePool};
+use sqlx::{
+    query, query_scalar, sqlite::SqliteArguments, sqlite::SqliteConnectOptions, sqlite::SqliteRow,
+    Column, Row, SqlitePool,
+};
 
 use crate::{db::Database, db::DbValue, error::ApiError, Result};
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
 #[derive(Clone)]
 pub struct SqliteDatabase {
@@ -12,30 +19,21 @@ pub struct SqliteDatabase {
 
 impl SqliteDatabase {
     pub async fn connect_and_migrate(database_url: &str) -> Result<Self> {
-        let pool = SqlitePool::connect(database_url)
+        ensure_sqlite_parent_dir(database_url)?;
+
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|e| ApiError::internal(format!("parse db url failed: {}", e)))?
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options)
             .await
             .map_err(|e| ApiError::internal(format!("db connect failed: {}", e)))?;
 
-        sqlx::query(include_str!("../../../migrations/0001_initial_schema.sql"))
-            .execute(&pool)
+        bootstrap_legacy_migration_state(&pool).await?;
+        MIGRATOR
+            .run(&pool)
             .await
             .map_err(|e| ApiError::internal(format!("migration failed: {}", e)))?;
-
-        let has_user_identities: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_identities' LIMIT 1",
-        )
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| ApiError::internal(format!("check migration state failed: {}", e)))?;
-
-        if has_user_identities.is_none() {
-            sqlx::query(include_str!(
-                "../../../migrations/0002_multi_provider_auth.sql"
-            ))
-            .execute(&pool)
-            .await
-            .map_err(|e| ApiError::internal(format!("migration 0002 failed: {}", e)))?;
-        }
 
         Ok(Self { pool })
     }
@@ -76,6 +74,100 @@ impl SqliteDatabase {
         }
         Value::Object(out)
     }
+}
+
+fn ensure_sqlite_parent_dir(database_url: &str) -> Result<()> {
+    if !database_url.starts_with("sqlite://") {
+        return Ok(());
+    }
+
+    let raw_path = database_url
+        .trim_start_matches("sqlite://")
+        .split('?')
+        .next()
+        .unwrap_or_default();
+
+    if raw_path.is_empty() || raw_path == ":memory:" {
+        return Ok(());
+    }
+
+    let parent = Path::new(raw_path).parent();
+    if let Some(parent) = parent {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ApiError::internal(format!("create db directory failed: {}", e)))?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn bootstrap_legacy_migration_state(pool: &SqlitePool) -> Result<()> {
+    let has_migration_table: Option<i64> = query_scalar(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("check sqlx migration table failed: {}", e)))?;
+    if has_migration_table.is_some() {
+        return Ok(());
+    }
+
+    let has_user_identities: bool = query_scalar::<_, i64>(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_identities' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("check user_identities table failed: {}", e)))?
+    .is_some();
+    let has_token_provider: bool = query_scalar::<_, i64>(
+        "SELECT 1 FROM pragma_table_info('token_cache') WHERE name = 'provider' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("check token_cache.provider failed: {}", e)))?
+    .is_some();
+
+    // Legacy databases that were migrated manually may already be at schema v2
+    // but still miss `_sqlx_migrations`. Seed v1/v2 records so sqlx can continue
+    // from the current state.
+    if !(has_user_identities && has_token_provider) {
+        return Ok(());
+    }
+
+    query(
+        r#"
+CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    success BOOLEAN NOT NULL,
+    checksum BLOB NOT NULL,
+    execution_time BIGINT NOT NULL
+)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("create sqlx migration table failed: {}", e)))?;
+
+    for version in [1_i64, 2_i64] {
+        let migration = MIGRATOR
+            .iter()
+            .find(|m| m.version == version)
+            .ok_or_else(|| ApiError::internal(format!("missing migration {}", version)))?;
+        query(
+            "INSERT OR IGNORE INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?1, ?2, TRUE, ?3, 0)",
+        )
+        .bind(migration.version)
+        .bind(migration.description.as_ref())
+        .bind(migration.checksum.as_ref())
+        .execute(pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("seed sqlx migration {} failed: {}", version, e)))?;
+    }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -143,6 +235,8 @@ impl Database for SqliteDatabase {
 mod tests {
     use super::SqliteDatabase;
     use crate::db::{Database, DbValue};
+    use sqlx::{query, query_scalar, sqlite::SqliteConnectOptions, SqlitePool};
+    use std::str::FromStr;
 
     async fn make_db() -> (tempfile::TempPath, SqliteDatabase) {
         let db_file = tempfile::NamedTempFile::new()
@@ -246,5 +340,68 @@ mod tests {
             .await
             .expect_err("batch should fail");
         assert_eq!(batch_err.status, 500);
+    }
+
+    #[tokio::test]
+    async fn connect_and_migrate_creates_missing_parent_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("data").join("atrium.db");
+        let db_url = format!("sqlite://{}", db_path.to_string_lossy().replace('\\', "/"));
+
+        assert!(!db_path.parent().expect("parent").exists());
+        let _db = SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("connect db");
+
+        assert!(db_path.parent().expect("parent").exists());
+        assert!(db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn connect_and_migrate_bootstraps_legacy_schema_to_sqlx_tracking() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("legacy.db");
+        let db_url = format!("sqlite://{}", db_path.to_string_lossy().replace('\\', "/"));
+
+        let options = SqliteConnectOptions::from_str(&db_url)
+            .expect("parse sqlite url")
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .expect("connect legacy db");
+        query(include_str!("../../../migrations/0001_initial_schema.sql"))
+            .execute(&pool)
+            .await
+            .expect("apply migration 0001 manually");
+        query(include_str!(
+            "../../../migrations/0002_multi_provider_auth.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("apply migration 0002 manually");
+        pool.close().await;
+
+        let _db = SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("connect and migrate through sqlx");
+
+        let verify_pool = SqlitePool::connect(&db_url).await.expect("verify connect");
+        let count: i64 = query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&verify_pool)
+            .await
+            .expect("count sqlx migrations");
+        assert_eq!(count, 2);
+        let v1: Option<i64> =
+            query_scalar("SELECT 1 FROM _sqlx_migrations WHERE version = 1 LIMIT 1")
+                .fetch_optional(&verify_pool)
+                .await
+                .expect("find v1");
+        let v2: Option<i64> =
+            query_scalar("SELECT 1 FROM _sqlx_migrations WHERE version = 2 LIMIT 1")
+                .fetch_optional(&verify_pool)
+                .await
+                .expect("find v2");
+        assert!(v1.is_some());
+        assert!(v2.is_some());
     }
 }
