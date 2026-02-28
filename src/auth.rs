@@ -392,12 +392,14 @@ mod tests {
 
     #[cfg(feature = "server")]
     use super::{resolve_github_user, resolve_xtalk_jwt_user, HttpClient, UpstreamResponse};
+    #[cfg(all(feature = "server", any(feature = "test-utils", feature = "worker")))]
+    use crate::types::AuthUser;
     #[cfg(feature = "server")]
     use crate::{
         db::{self, Database, DbValue},
         error::ApiError,
         jwt,
-        types::{AuthUser, GitHubApiUser, JwtClaims},
+        types::{GitHubApiUser, JwtClaims},
     };
 
     #[cfg(feature = "server")]

@@ -19,7 +19,7 @@ required-features = ["server"]
 default = []
 worker = ["dep:worker"]
 server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:reqwest", "dep:tower-http", "dep:moka"]
-test-utils = ["server"]
+test-utils = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -354,29 +354,31 @@ fn parse_max_age(headers: &[(String, String)]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    #[cfg(feature = "server")]
+    use std::collections::HashMap;
+    #[cfg(feature = "server")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg(feature = "server")]
     use async_trait::async_trait;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    #[cfg(feature = "server")]
     use bytes::Bytes;
     use p256::ecdsa::{Signature as EcRawSignature, SigningKey as EcSigningKey};
     use rand::rngs::OsRng;
     use rsa::{pkcs1v15::SigningKey as RsaSigningKey, traits::PublicKeyParts, RsaPrivateKey};
     use sha2::Sha256;
 
+    #[cfg(feature = "server")]
     use crate::{
         auth::{HttpClient, UpstreamResponse},
         error::ApiError,
         types::GitHubApiUser,
     };
 
-    use super::{
-        aud_matches, parse_jwt_parts, parse_max_age, verify_apple_id_token, verify_google_id_token,
-        verify_provider_id_token, verify_signature, JwkKey,
-    };
+    use super::{aud_matches, parse_jwt_parts, parse_max_age, verify_signature, JwkKey};
+    #[cfg(feature = "server")]
+    use super::{verify_apple_id_token, verify_google_id_token, verify_provider_id_token};
 
     #[cfg(feature = "server")]
     async fn make_db() -> (
@@ -393,6 +395,7 @@ mod tests {
         (db_file, db)
     }
 
+    #[cfg(feature = "server")]
     struct MockHttp {
         status: u16,
         headers: Vec<(String, String)>,
@@ -400,6 +403,7 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    #[cfg(feature = "server")]
     impl MockHttp {
         fn jwks_ok(jwks_json: String) -> Self {
             Self {
@@ -424,6 +428,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     #[cfg_attr(feature = "server", async_trait)]
     #[cfg_attr(not(feature = "server"), async_trait(?Send))]
     impl HttpClient for MockHttp {
@@ -449,6 +454,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
     fn rsa_jwk_and_token(
         kid: &str,
         sub: &str,

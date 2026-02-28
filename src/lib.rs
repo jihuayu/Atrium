@@ -1,3 +1,6 @@
+#[cfg(all(feature = "worker", feature = "server"))]
+compile_error!("Features `worker` and `server` are mutually exclusive. Enable only one.");
+
 pub mod auth;
 pub mod cache;
 pub mod db;
