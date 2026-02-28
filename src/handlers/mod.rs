@@ -96,7 +96,7 @@ pub async fn current_user(_req: AppRequest, ctx: &AppContext<'_>) -> AppResponse
 
 pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
     let text = concat!(
-        "xtalk - GitHub Issues compatible comment backend\n",
+        "Atrium - GitHub Issues compatible comment backend\n",
         "\n",
         "GitHub-Compatible API (token auth):\n",
         "  GET    /repos/{owner}/{repo}/issues\n",
@@ -136,7 +136,7 @@ pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
         "  DELETE /api/v1/repos/{owner}/{repo}/labels/{name}\n",
         "  GET    /api/v1/repos/{owner}/{repo}/export\n",
         "\n",
-        "Source: https://github.com/pnnh/xtalk\n",
+        "Source: https://github.com/pnnh/atrium\n",
     );
     AppResponse {
         status: 200,
@@ -145,5 +145,24 @@ pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
             "text/plain; charset=utf-8".to_string(),
         )],
         body: bytes::Bytes::from(text),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn json_response_adds_link_header_when_present() {
+        let response = super::json_response(
+            200,
+            &serde_json::json!({"ok": true}),
+            Some("</next>; rel=\"next\"".to_string()),
+        );
+
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Link" && value == "</next>; rel=\"next\"")
+        );
     }
 }

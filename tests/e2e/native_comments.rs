@@ -98,3 +98,53 @@ async fn native_comments_auth_and_permission_branches() {
         .unwrap();
     assert_eq!(alice_delete.status(), 204);
 }
+
+#[tokio::test]
+async fn native_comments_get_and_cursor_paths() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-comments-cursor";
+
+    let number = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "thread").await;
+    let c1 = fixtures::seed_comment(&app, &app.as_alice(), owner, repo, number, "c1").await;
+    let _c2 = fixtures::seed_comment(&app, &app.as_alice(), owner, repo, number, "c2").await;
+    let _c3 = fixtures::seed_comment(&app, &app.as_alice(), owner, repo, number, "c3").await;
+
+    let first = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}/comments?order=desc&limit=2",
+            owner, repo, number
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert!(first_body["pagination"]["has_more"].as_bool().unwrap_or(false));
+    let next_cursor = first_body["pagination"]["next_cursor"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads/{}/comments?order=desc&limit=2&cursor={}",
+            owner, repo, number, next_cursor
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 200);
+
+    let get = app
+        .as_anon()
+        .get(&app.url(&format!("/api/v1/repos/{}/{}/comments/{}", owner, repo, c1)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 200);
+    let get_body: serde_json::Value = get.json().await.unwrap();
+    assert_eq!(get_body["id"].as_i64(), Some(c1));
+}

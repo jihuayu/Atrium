@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/deploy.py — xtalk Worker 部署脚本
+scripts/deploy.py — Atrium Worker 部署脚本
 
 自动完成：构建 → D1 迁移 → 部署
 
@@ -104,7 +104,7 @@ def step_deploy(dry_run: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="xtalk Worker deploy script")
+    parser = argparse.ArgumentParser(description="Atrium Worker deploy script")
     parser.add_argument("--dry-run", action="store_true",
                         help="Build + show pending migrations, but don't deploy")
     parser.add_argument("--migrate", action="store_true",

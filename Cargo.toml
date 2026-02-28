@@ -1,13 +1,17 @@
 [package]
-name = "xtalk"
+name = "atrium"
 version = "0.1.0"
 edition = "2021"
+authors = ["jihuayu"]
+license = "Apache-2.0"
+repository = "https://github.com/jihuayu/atrium"
+homepage = "https://github.com/jihuayu/atrium"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "xtalk-server"
+name = "atrium-server"
 path = "src/bin/server.rs"
 required-features = ["server"]
 

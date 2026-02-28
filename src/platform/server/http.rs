@@ -26,7 +26,7 @@ impl ReqwestHttpClient {
 
     fn with_urls(github_user_url: String, utterances_token_url: String) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("xtalk/0.1")
+            .user_agent("atrium/0.1")
             .build()
             .map_err(|e| ApiError::internal(format!("create reqwest client failed: {}", e)))?;
         Ok(Self {
@@ -315,7 +315,7 @@ mod tests {
         forwarded.insert("content-type".to_string(), "application/json".to_string());
         forwarded.insert("referer".to_string(), "https://x.test".to_string());
         forwarded.insert("origin".to_string(), "https://x.test".to_string());
-        forwarded.insert("user-agent".to_string(), "xtalk-test".to_string());
+        forwarded.insert("user-agent".to_string(), "atrium-test".to_string());
         forwarded.insert("cookie".to_string(), "a=1".to_string());
         forwarded.insert("sec-ch-ua".to_string(), "ua".to_string());
         forwarded.insert("sec-ch-ua-mobile".to_string(), "?0".to_string());
@@ -352,5 +352,51 @@ mod tests {
             .err()
             .expect("must fail on connection");
         assert_eq!(err.status, 500);
+    }
+
+    #[tokio::test]
+    async fn health_check_and_send_error_paths() {
+        let (base, _handle) = spawn_server().await;
+
+        let ok_client = ReqwestHttpClient::with_urls(
+            format!("{}/user-ok", base),
+            format!("{}/token", base),
+        )
+        .expect("create client");
+        let user = ok_client
+            .health_check_user("token")
+            .await
+            .expect("health check ok");
+        assert_eq!(user.login, "alice");
+
+        let unreachable_user_client = ReqwestHttpClient::with_urls(
+            "http://127.0.0.1:1/unreachable".to_string(),
+            format!("{}/token", base),
+        )
+        .expect("create client");
+        let user_err = unreachable_user_client
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("github send must fail");
+        assert_eq!(user_err.status, 500);
+
+        let unreachable_token_client = ReqwestHttpClient::with_urls(
+            format!("{}/user-ok", base),
+            "http://127.0.0.1:1/unreachable".to_string(),
+        )
+        .expect("create client");
+        let token_err = unreachable_token_client
+            .post_utterances_token(br#"{}"#, &HashMap::new())
+            .await
+            .err()
+            .expect("token send must fail");
+        assert_eq!(token_err.status, 500);
+
+        let bad_headers_upstream = ok_client
+            .post_utterances_token(br#"{}"#, &HashMap::new())
+            .await
+            .expect("upstream response still returned");
+        assert_eq!(bad_headers_upstream.status, 400);
     }
 }

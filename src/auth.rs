@@ -643,4 +643,140 @@ mod tests {
         .expect("user exists");
         assert_eq!(user.id, 7);
     }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn resolve_user_wrapper_and_provider_user_paths() {
+        #[derive(Debug, Deserialize)]
+        struct IdentityRow {
+            user_id: i64,
+        }
+
+        let (_db_file, db) = make_db().await;
+        db.execute(
+            "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES \
+             (11, 'existing', 'e@test.com', 'https://avatars/e', 'User', 0, datetime('now'))",
+            &[],
+        )
+        .await
+        .expect("insert existing user");
+        db.execute(
+            "INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at) VALUES \
+             (11, 'google', 'g-11', 'e@test.com', 'https://avatars/e', datetime('now'))",
+            &[],
+        )
+        .await
+        .expect("insert existing identity");
+
+        let http = MockHttp::new(GitHubApiUser {
+            id: 42,
+            login: "Alice".to_string(),
+            email: Some("alice@example.com".to_string()),
+            avatar_url: "https://avatars/a".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        });
+        let resolved = super::resolve_user(&db, &http, "gh-token-wrapper", 3600)
+            .await
+            .expect("resolve via wrapper");
+        assert_eq!(resolved.login, "Alice");
+
+        let by_identity = super::resolve_or_create_provider_user(
+            &db,
+            "google",
+            "g-11",
+            "new-login",
+            "x@test.com",
+            "https://avatars/x",
+            "User",
+            false,
+        )
+        .await
+        .expect("identity hit");
+        assert_eq!(by_identity, 11);
+
+        let by_email = super::resolve_or_create_provider_user(
+            &db,
+            "apple",
+            "apple-11",
+            "new-login",
+            "e@test.com",
+            "https://avatars/e2",
+            "User",
+            false,
+        )
+        .await
+        .expect("email match");
+        assert_eq!(by_email, 11);
+
+        let identity = db::query_opt::<IdentityRow>(
+            &db,
+            "SELECT user_id FROM user_identities WHERE provider = ?1 AND provider_user_id = ?2",
+            &[
+                DbValue::Text("apple".to_string()),
+                DbValue::Text("apple-11".to_string()),
+            ],
+        )
+        .await
+        .expect("query identity")
+        .expect("identity exists");
+        assert_eq!(identity.user_id, 11);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn unique_login_handles_empty_preferred_and_exhaustion() {
+        let (_db_file, db) = make_db().await;
+
+        db.execute(
+            "INSERT INTO users (login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, '', '', 'User', 0, datetime('now'))",
+            &[DbValue::Text("user".to_string())],
+        )
+        .await
+        .expect("insert user");
+        let candidate = super::unique_login(&db, "   ")
+            .await
+            .expect("allocate user-1");
+        assert_eq!(candidate, "user-1");
+
+        for index in 1..1000 {
+            let login = format!("user-{}", index);
+            db.execute(
+                "INSERT INTO users (login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, '', '', 'User', 0, datetime('now'))",
+                &[DbValue::Text(login)],
+            )
+            .await
+            .expect("insert login");
+        }
+
+        let err = super::unique_login(&db, "user")
+            .await
+            .err()
+            .expect("must exhaust");
+        assert_eq!(err.status, 500);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn mock_http_aux_methods_are_exercised() {
+        let http = MockHttp::new(GitHubApiUser {
+            id: 1,
+            login: "u".to_string(),
+            email: None,
+            avatar_url: String::new(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        });
+        let jwks_err = http
+            .get_jwks("https://example.com/jwks")
+            .await
+            .err()
+            .expect("not used");
+        assert_eq!(jwks_err.status, 500);
+        let up = http
+            .post_utterances_token(&[], &std::collections::HashMap::new())
+            .await
+            .expect("ok");
+        assert_eq!(up.status, 200);
+    }
 }

@@ -126,3 +126,58 @@ async fn native_threads_auth_and_permission_branches() {
         .unwrap();
     assert_eq!(admin_delete.status(), 204);
 }
+
+#[tokio::test]
+async fn native_threads_get_desc_cursor_and_delete_not_found() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-threads-desc";
+
+    let n1 = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "t1").await;
+    let _n2 = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "t2").await;
+    let _n3 = fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "t3").await;
+
+    let first = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads?limit=2&direction=desc",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert!(first_body["pagination"]["has_more"].as_bool().unwrap_or(false));
+    let next_cursor = first_body["pagination"]["next_cursor"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads?limit=2&direction=desc&cursor={}",
+            owner, repo, next_cursor
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 200);
+
+    let get = app
+        .as_anon()
+        .get(&app.url(&format!("/api/v1/repos/{}/{}/threads/{}", owner, repo, n1)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 200);
+
+    let missing_delete = app
+        .as_admin()
+        .delete(&app.url(&format!("/api/v1/repos/{}/{}/threads/999999", owner, repo)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), 404);
+}

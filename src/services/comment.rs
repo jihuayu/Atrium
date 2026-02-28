@@ -390,3 +390,180 @@ fn is_comment_in_repo(comment: &CommentResponse, owner: &str, repo: &str) -> boo
     let marker = format!("/repos/{}/{}/issues/", owner, repo);
     comment.issue_url.contains(&marker)
 }
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use std::collections::HashMap;
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+
+    use super::{create_comment, delete_comment, get_comment, list_comments, to_iso8601, update_comment};
+    use crate::{
+        auth::{HttpClient, UpstreamResponse},
+        db::Database,
+        error::ApiError,
+        platform::server::cache::CommentCache,
+        types::{CreateCommentInput, GitHubApiUser, GitHubUser, ListCommentsQuery, UpdateCommentInput},
+        AppContext,
+    };
+
+    struct NoopHttp;
+
+    #[async_trait]
+    impl HttpClient for NoopHttp {
+        async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn get_jwks(&self, _url: &str) -> crate::Result<UpstreamResponse> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn post_utterances_token(
+            &self,
+            _body: &[u8],
+            _headers: &HashMap<String, String>,
+        ) -> crate::Result<UpstreamResponse> {
+            Ok(UpstreamResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Bytes::new(),
+            })
+        }
+    }
+
+    async fn make_db() -> (tempfile::TempPath, crate::platform::server::sqlite::SqliteDatabase) {
+        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::platform::server::sqlite::SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("db init");
+        (db_file, db)
+    }
+
+    async fn seed(db: &dyn Database) {
+        db.execute(
+            "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES \
+             (2, 'alice', 'alice@test.com', 'https://avatars/a', 'User', 0, datetime('now'))",
+            &[],
+        )
+        .await
+        .expect("insert user");
+        db.execute(
+            "INSERT INTO repos (id, owner, name, admin_user_id, issue_counter, created_at) VALUES \
+             (10, 'o', 'r', 2, 1, datetime('now'))",
+            &[],
+        )
+        .await
+        .expect("insert repo");
+        db.execute(
+            "INSERT INTO issues (id, repo_id, number, title, body, state, locked, user_id, comment_count, created_at, updated_at) VALUES \
+             (20, 10, 1, 't', 'b', 'open', 0, 2, 1, datetime('now'), datetime('now'))",
+            &[],
+        )
+        .await
+        .expect("insert issue");
+        db.execute(
+            "INSERT INTO comments (id, repo_id, issue_id, body, user_id, created_at, updated_at, reactions) VALUES \
+             (30, 10, 20, 'seed', 2, datetime('now'), datetime('now'), '{}')",
+            &[],
+        )
+        .await
+        .expect("insert comment");
+    }
+
+    fn ctx<'a>(
+        db: &'a dyn Database,
+        http: &'a dyn HttpClient,
+        cache: Option<&'a CommentCache>,
+        user: Option<&'a GitHubUser>,
+    ) -> AppContext<'a> {
+        AppContext {
+            db,
+            http,
+            comment_cache: cache.map(|v| v as &dyn crate::cache::CommentCacheStore),
+            base_url: "http://localhost",
+            user,
+            jwt_secret: b"test-jwt-secret-at-least-32-bytes!!",
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: false,
+            test_bypass_secret: None,
+        }
+    }
+
+    #[test]
+    fn to_iso8601_keeps_existing_iso() {
+        assert_eq!(to_iso8601("2025-01-01T00:00:00Z"), "2025-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn cache_and_invalidation_paths_are_exercised() {
+        let (_db_file, db) = make_db().await;
+        seed(&db).await;
+        let http = NoopHttp;
+        let cache = CommentCache::new(128, 60);
+        let alice = GitHubUser {
+            id: 2,
+            login: "alice".to_string(),
+            email: "alice@test.com".to_string(),
+            avatar_url: "https://avatars/a".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        };
+
+        let anon_ctx = ctx(&db, &http, Some(&cache), None);
+        let query = ListCommentsQuery {
+            per_page: Some(10),
+            page: Some(1),
+            since: None,
+        };
+        let (first_items, _, _, _) = list_comments(&anon_ctx, "o", "r", 1, &query)
+            .await
+            .expect("first list");
+        assert_eq!(first_items.len(), 1);
+        let (second_items, _, _, _) = list_comments(&anon_ctx, "o", "r", 1, &query)
+            .await
+            .expect("second list from cache");
+        assert_eq!(second_items.len(), 1);
+
+        let by_db = get_comment(&anon_ctx, "o", "r", 30)
+            .await
+            .expect("first get from db and set cache");
+        assert_eq!(by_db.author_association, "OWNER");
+        let by_cache = get_comment(&anon_ctx, "o", "r", 30)
+            .await
+            .expect("second get from cache");
+        assert_eq!(by_cache.id, 30);
+
+        let user_ctx = ctx(&db, &http, Some(&cache), Some(&alice));
+        let created = create_comment(
+            &user_ctx,
+            "o",
+            "r",
+            1,
+            &CreateCommentInput {
+                body: "new comment".to_string(),
+            },
+        )
+        .await
+        .expect("create comment");
+        let updated = update_comment(
+            &user_ctx,
+            "o",
+            "r",
+            created.id,
+            &UpdateCommentInput {
+                body: "edited".to_string(),
+            },
+        )
+        .await
+        .expect("update comment");
+        assert_eq!(updated.body.as_deref(), Some("edited"));
+
+        delete_comment(&user_ctx, "o", "r", created.id)
+            .await
+            .expect("delete comment");
+    }
+}

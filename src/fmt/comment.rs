@@ -53,7 +53,7 @@ impl ReactionCounts {
 }
 
 pub fn comment_node_id(comment_id: i64) -> String {
-    general_purpose::STANDARD.encode(format!("xtalk:Comment:{}", comment_id))
+    general_purpose::STANDARD.encode(format!("atrium:Comment:{}", comment_id))
 }
 
 pub fn to_reactions(
@@ -78,5 +78,30 @@ pub fn to_reactions(
         hooray: counts.hooray,
         rocket: counts.rocket,
         eyes: counts.eyes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReactionCounts;
+
+    #[test]
+    fn apply_delta_supports_all_reactions_and_ignores_unknown() {
+        let mut counts = ReactionCounts::default();
+        counts.apply_delta("hooray", 1);
+        counts.apply_delta("rocket", 2);
+        counts.apply_delta("eyes", 3);
+        counts.apply_delta("unknown", 10);
+        assert_eq!(counts.hooray, 1);
+        assert_eq!(counts.rocket, 2);
+        assert_eq!(counts.eyes, 3);
+        assert_eq!(counts.total, 6);
+    }
+
+    #[test]
+    fn apply_delta_clamps_negative_total() {
+        let mut counts = ReactionCounts::default();
+        counts.apply_delta("+1", -1);
+        assert_eq!(counts.total, 0);
     }
 }

@@ -24,10 +24,15 @@ pub struct AuthClient {
 
 impl TestApp {
     pub async fn start() -> Self {
-        match std::env::var("XTALK_TEST_BASE_URL") {
+        match std::env::var("ATRIUM_TEST_BASE_URL")
+            .or_else(|_| std::env::var("XTALK_TEST_BASE_URL"))
+        {
             Ok(url) => {
-                let secret = std::env::var("XTALK_TEST_BYPASS_SECRET")
-                    .expect("XTALK_TEST_BYPASS_SECRET must be set for external target");
+                let secret = std::env::var("ATRIUM_TEST_BYPASS_SECRET")
+                    .or_else(|_| std::env::var("XTALK_TEST_BYPASS_SECRET"))
+                    .expect(
+                        "ATRIUM_TEST_BYPASS_SECRET or XTALK_TEST_BYPASS_SECRET must be set for external target",
+                    );
                 Self {
                     base_url: url,
                     bypass_secret: secret,
@@ -42,7 +47,9 @@ impl TestApp {
 
                 #[cfg(not(feature = "server"))]
                 {
-                    panic!("XTALK_TEST_BASE_URL is required when server feature is disabled");
+                    panic!(
+                        "ATRIUM_TEST_BASE_URL or XTALK_TEST_BASE_URL is required when server feature is disabled"
+                    );
                 }
             }
         }
@@ -50,17 +57,19 @@ impl TestApp {
 
     #[cfg(feature = "server")]
     async fn spawn_server() -> Self {
-        let secret = std::env::var("XTALK_TEST_BYPASS_SECRET")
+        let secret = std::env::var("ATRIUM_TEST_BYPASS_SECRET")
+            .or_else(|_| std::env::var("XTALK_TEST_BYPASS_SECRET"))
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "xtalk-test-bypass-secret".to_string());
+            .unwrap_or_else(|| "atrium-test-bypass-secret".to_string());
+        std::env::set_var("ATRIUM_TEST_BYPASS_SECRET", &secret);
         std::env::set_var("XTALK_TEST_BYPASS_SECRET", &secret);
 
         let db_file = tempfile::NamedTempFile::new().unwrap().into_temp_path();
         let db_path = db_file.to_string_lossy().replace('\\', "/");
         let db_url = format!("sqlite://{}", db_path);
 
-        let app = xtalk::platform::server::build_app(
+        let app = atrium::platform::server::build_app(
             &db_url,
             "http://localhost".to_string(),
             3600,

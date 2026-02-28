@@ -442,3 +442,14 @@ fn to_iso8601(value: &str) -> String {
     }
     value.replace(' ', "T") + "Z"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::to_iso8601;
+
+    #[test]
+    fn to_iso8601_keeps_existing_iso() {
+        assert_eq!(to_iso8601("2025-01-15T08:00:00Z"), "2025-01-15T08:00:00Z");
+        assert_eq!(to_iso8601("2025-01-15 08:00:00"), "2025-01-15T08:00:00Z");
+    }
+}

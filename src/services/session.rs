@@ -137,6 +137,11 @@ mod tests {
         assert!(parse_sqlite_datetime("not-a-time").is_none());
     }
 
+    #[test]
+    fn parse_datetime_with_t_separator_without_z() {
+        assert!(parse_sqlite_datetime("2025-01-15T08:00:00").is_none());
+    }
+
     #[cfg(feature = "server")]
     struct NoopHttp;
 
@@ -308,5 +313,60 @@ mod tests {
             .err()
             .expect("revoked must fail");
         assert_eq!(revoked.status, 401);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn validate_session_allows_empty_expiry_and_exercises_noop_http() {
+        let (_db_file, db) = make_db().await;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        insert_user(&db, 4, "dave").await;
+
+        let token_hash = crate::auth::hash_token("refresh-empty-exp");
+        db.execute(
+            "INSERT INTO sessions (refresh_token_hash, user_id, created_at, expires_at, revoked_at) \
+             VALUES (?1, ?2, datetime('now'), '', NULL)",
+            &[DbValue::Text(token_hash), DbValue::Integer(4)],
+        )
+        .await
+        .expect("insert session");
+
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: true,
+            test_bypass_secret: None,
+        };
+
+        super::validate_session(&ctx, "refresh-empty-exp", 4)
+            .await
+            .expect("empty expiry accepted");
+
+        let gh_err = http
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("noop github");
+        assert_eq!(gh_err.status, 500);
+
+        let jwks_err = http
+            .get_jwks("https://example.com/jwks")
+            .await
+            .err()
+            .expect("noop jwks");
+        assert_eq!(jwks_err.status, 500);
+
+        let utterances_ok = http
+            .post_utterances_token(&[], &HashMap::new())
+            .await
+            .expect("noop utterances");
+        assert_eq!(utterances_ok.status, 200);
     }
 }

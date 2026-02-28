@@ -371,8 +371,8 @@ mod tests {
     };
 
     use super::{
-        aud_matches, parse_jwt_parts, parse_max_age, verify_provider_id_token, verify_signature,
-        JwkKey,
+        aud_matches, parse_jwt_parts, parse_max_age, verify_apple_id_token,
+        verify_google_id_token, verify_provider_id_token, verify_signature, JwkKey,
     };
 
     #[cfg(feature = "server")]
@@ -575,6 +575,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_jwt_parts_rejects_extra_and_missing_parts() {
+        let missing_payload = parse_jwt_parts("a")
+            .err()
+            .expect("missing payload must fail");
+        assert_eq!(missing_payload.status, 401);
+
+        let extra_part = parse_jwt_parts("a.b.c.d")
+            .err()
+            .expect("extra part must fail");
+        assert_eq!(extra_part.status, 401);
+    }
+
+    #[test]
     fn verify_signature_supports_rs256_and_es256() {
         use rsa::signature::{SignatureEncoding, Signer};
 
@@ -602,6 +615,74 @@ mod tests {
             .err()
             .expect("unsupported alg");
         assert_eq!(err.status, 401);
+    }
+
+    #[test]
+    fn verify_signature_rejects_mismatched_kty_and_alg() {
+        let message = b"header.payload";
+        let (ec_key, ec_sig) = ec_jwk_and_signature(message);
+
+        let wrong_kty_for_es = JwkKey {
+            kid: ec_key.kid.clone(),
+            alg: ec_key.alg.clone(),
+            kty: "RSA".to_string(),
+            n: ec_key.n.clone(),
+            e: ec_key.e.clone(),
+            x: ec_key.x.clone(),
+            y: ec_key.y.clone(),
+        };
+        let err = verify_signature("ES256", &wrong_kty_for_es, "header.payload", &ec_sig)
+            .err()
+            .expect("wrong kty for es256");
+        assert_eq!(err.status, 401);
+
+        let wrong_alg_for_es = JwkKey {
+            kid: ec_key.kid.clone(),
+            alg: Some("ES384".to_string()),
+            kty: ec_key.kty.clone(),
+            n: ec_key.n.clone(),
+            e: ec_key.e.clone(),
+            x: ec_key.x.clone(),
+            y: ec_key.y.clone(),
+        };
+        let err = verify_signature("ES256", &wrong_alg_for_es, "header.payload", &ec_sig)
+            .err()
+            .expect("wrong alg for es256");
+        assert_eq!(err.status, 401);
+
+        let rsa_like = JwkKey {
+            kid: Some("k".to_string()),
+            alg: Some("RS384".to_string()),
+            kty: "RSA".to_string(),
+            n: Some("AQAB".to_string()),
+            e: Some("AQAB".to_string()),
+            x: None,
+            y: None,
+        };
+        let err = verify_signature("RS256", &rsa_like, "header.payload", &[1, 2, 3])
+            .err()
+            .expect("wrong alg for rs256");
+        assert_eq!(err.status, 401);
+
+        let wrong_kty_for_rs = JwkKey {
+            kid: Some("k".to_string()),
+            alg: Some("RS256".to_string()),
+            kty: "EC".to_string(),
+            n: Some("AQAB".to_string()),
+            e: Some("AQAB".to_string()),
+            x: None,
+            y: None,
+        };
+        let err = verify_signature("RS256", &wrong_kty_for_rs, "header.payload", &[1, 2, 3])
+            .err()
+            .expect("wrong kty for rs256");
+        assert_eq!(err.status, 401);
+    }
+
+    #[test]
+    fn parse_max_age_invalid_returns_none() {
+        let headers = vec![("Cache-Control".to_string(), "max-age=abc".to_string())];
+        assert_eq!(parse_max_age(&headers), None);
     }
 
     #[cfg(feature = "server")]
@@ -644,6 +725,145 @@ mod tests {
         .await
         .expect("verify cached ok");
         assert!(http.calls() >= 1);
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn verify_google_and_apple_wrappers_and_cache_paths() {
+        use crate::db::{Database, DbValue};
+
+        let (_db_file, db) = make_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        let (google_jwks, google_token) = rsa_jwk_and_token(
+            "k-google",
+            "google-user",
+            serde_json::json!("google-client"),
+            "https://accounts.google.com",
+            now + 3600,
+        );
+        let google_http = MockHttp::jwks_ok(google_jwks);
+        let google_user = verify_google_id_token(
+            &db,
+            &google_http,
+            &google_token,
+            Some("google-client"),
+        )
+        .await
+        .expect("google verify");
+        assert_eq!(google_user.provider, "google");
+
+        let (apple_jwks, apple_token) = rsa_jwk_and_token(
+            "k-apple",
+            "apple-user",
+            serde_json::json!("apple-client"),
+            "https://appleid.apple.com",
+            now + 3600,
+        );
+        let apple_http = MockHttp::jwks_ok(apple_jwks);
+        let apple_user =
+            verify_apple_id_token(&db, &apple_http, &apple_token, Some("apple-client"))
+                .await
+                .expect("apple verify");
+        assert_eq!(apple_user.provider, "apple");
+
+        let (no_aud_jwks, no_aud_token) = rsa_jwk_and_token(
+            "k-no-aud",
+            "u-no-aud",
+            serde_json::json!("anything"),
+            "https://issuer.noaud",
+            now + 3600,
+        );
+        let no_aud_http = MockHttp::jwks_ok(no_aud_jwks);
+        let no_aud_user = verify_provider_id_token(
+            &db,
+            &no_aud_http,
+            &no_aud_token,
+            "provider_no_aud",
+            "https://jwks.noaud",
+            "https://issuer.noaud",
+            None,
+        )
+        .await
+        .expect("verify without aud check");
+        assert_eq!(no_aud_user.provider_user_id, "u-no-aud");
+
+        let (cached_jwks, cached_token) = rsa_jwk_and_token(
+            "k-db-cache",
+            "u-db-cache",
+            serde_json::json!("db-client"),
+            "https://issuer.db",
+            now + 3600,
+        );
+        db.execute(
+            "INSERT INTO jwks_cache (provider, jwks_json, expires_at) VALUES (?1, ?2, ?3)",
+            &[
+                DbValue::Text("provider_db_cache".to_string()),
+                DbValue::Text(cached_jwks),
+                DbValue::Text((now + 3600).to_string()),
+            ],
+        )
+        .await
+        .expect("insert jwks cache row");
+        let fail_http = MockHttp::jwks_fail();
+        let from_db = verify_provider_id_token(
+            &db,
+            &fail_http,
+            &cached_token,
+            "provider_db_cache",
+            "https://jwks.db",
+            "https://issuer.db",
+            Some("db-client"),
+        )
+        .await
+        .expect("must use db cache");
+        assert_eq!(from_db.provider_user_id, "u-db-cache");
+
+        super::server_cache()
+            .insert(
+                "provider_stale".to_string(),
+                ("{\"keys\":[]}".to_string(), 0),
+            )
+            .await;
+
+        let (stale_jwks, stale_token) = rsa_jwk_and_token(
+            "k-stale",
+            "u-stale",
+            serde_json::json!("stale-client"),
+            "https://issuer.stale",
+            now + 3600,
+        );
+        let stale_http = MockHttp::jwks_ok(stale_jwks);
+        let stale_user = verify_provider_id_token(
+            &db,
+            &stale_http,
+            &stale_token,
+            "provider_stale",
+            "https://jwks.stale",
+            "https://issuer.stale",
+            Some("stale-client"),
+        )
+        .await
+        .expect("stale server cache fallback");
+        assert_eq!(stale_user.provider_user_id, "u-stale");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn mock_http_unused_methods_are_exercised() {
+        let http = MockHttp::jwks_fail();
+        let github_err = http
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("not used");
+        assert_eq!(github_err.status, 500);
+        let utterances_err = http
+            .post_utterances_token(&[], &HashMap::new())
+            .await
+            .err()
+            .expect("not used");
+        assert_eq!(utterances_err.status, 500);
     }
 
     #[cfg(feature = "server")]

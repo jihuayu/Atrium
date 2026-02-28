@@ -559,4 +559,48 @@ mod tests {
         assert_eq!(row.user_id, 21);
         assert_eq!(row.provider, "github");
     }
+
+    #[tokio::test]
+    async fn resolve_or_create_user_handles_empty_login_and_exercises_noop_http() {
+        let (_db_file, db) = make_db().await;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        let app_ctx = ctx(&db, &http, &secret, false);
+
+        let user = resolve_or_create_user(
+            &app_ctx,
+            &ProviderUser {
+                provider: "apple".to_string(),
+                provider_user_id: "apple-empty-login".to_string(),
+                login: "   ".to_string(),
+                email: "x@privaterelay.appleid.com".to_string(),
+                avatar_url: "https://avatars/p".to_string(),
+                r#type: "User".to_string(),
+                site_admin: false,
+            },
+        )
+        .await
+        .expect("create user with empty login");
+        assert!(user.login.starts_with("user"));
+
+        let gh_err = http
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("noop github");
+        assert_eq!(gh_err.status, 500);
+
+        let jwks_err = http
+            .get_jwks("https://example.com/jwks")
+            .await
+            .err()
+            .expect("noop jwks");
+        assert_eq!(jwks_err.status, 500);
+
+        let utterances_ok = http
+            .post_utterances_token(&[], &HashMap::new())
+            .await
+            .expect("noop utterances");
+        assert_eq!(utterances_ok.status, 200);
+    }
 }

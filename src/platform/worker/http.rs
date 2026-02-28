@@ -24,7 +24,7 @@ impl HttpClient for WorkerHttpClient {
             .set("Accept", "application/vnd.github+json")
             .map_err(|e| ApiError::internal(format!("set accept header failed: {}", e)))?;
         headers
-            .set("User-Agent", "xtalk/0.1")
+            .set("User-Agent", "atrium/0.1")
             .map_err(|e| ApiError::internal(format!("set ua header failed: {}", e)))?;
 
         let mut init = RequestInit::new();

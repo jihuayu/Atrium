@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/test.py — xtalk test runner
+scripts/test.py — Atrium test runner
 
 Usage:
     python scripts/test.py server
@@ -97,7 +97,7 @@ def run_worker_tests(extra: list[str]) -> None:
     jwt_secret = secrets.token_urlsafe(32)
     # 本地模式用固定 dummy ID，wrangler dev --local 自动创建本地 SQLite D1
     dummy_db_id = "00000000-0000-0000-0000-000000000000"
-    dummy_db_name = "xtalk-test-local"
+    dummy_db_name = "atrium-test-local"
 
     wrangler_proc: subprocess.Popen | None = None
     temp_cfg_path: str | None = None
@@ -227,8 +227,10 @@ def run_worker_tests(extra: list[str]) -> None:
         # ── Step 4: Run integration tests ────────────────────────
         print("\n[4/4] Running integration tests...")
         env = os.environ.copy()
-        env["XTALK_TEST_BASE_URL"] = f"http://127.0.0.1:{test_port}"
-        env["XTALK_TEST_BYPASS_SECRET"] = bypass_secret
+        env["ATRIUM_TEST_BASE_URL"] = f"http://127.0.0.1:{test_port}"
+        env["ATRIUM_TEST_BYPASS_SECRET"] = bypass_secret
+        env["XTALK_TEST_BASE_URL"] = env["ATRIUM_TEST_BASE_URL"]
+        env["XTALK_TEST_BYPASS_SECRET"] = env["ATRIUM_TEST_BYPASS_SECRET"]
         run(
             ["cargo", "test", "--test", "integration_test"] + extra,
             cwd=PROJECT_ROOT,
@@ -239,7 +241,7 @@ def run_worker_tests(extra: list[str]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="xtalk test runner")
+    parser = argparse.ArgumentParser(description="Atrium test runner")
     parser.add_argument(
         "mode", nargs="?", default="all", choices=["server", "worker", "all"]
     )

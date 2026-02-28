@@ -48,3 +48,23 @@ pub fn build_link_header(
 
     Some(links.join(", "))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_link_header;
+
+    #[test]
+    fn returns_none_for_invalid_per_page() {
+        assert!(build_link_header("http://localhost", "/x", 1, 0, 10).is_none());
+    }
+
+    #[test]
+    fn includes_prev_and_next_links() {
+        let link = build_link_header("http://localhost", "/repos/o/r/issues", 2, 10, 35)
+            .expect("link header");
+        assert!(link.contains("rel=\"next\""));
+        assert!(link.contains("rel=\"prev\""));
+        assert!(link.contains("rel=\"first\""));
+        assert!(link.contains("rel=\"last\""));
+    }
+}

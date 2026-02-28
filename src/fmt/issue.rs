@@ -3,7 +3,7 @@ use base64::{engine::general_purpose, Engine};
 use crate::types::{Reactions, RepoRow};
 
 pub fn issue_node_id(issue_id: i64) -> String {
-    general_purpose::STANDARD.encode(format!("xtalk:Issue:{}", issue_id))
+    general_purpose::STANDARD.encode(format!("atrium:Issue:{}", issue_id))
 }
 
 pub fn issue_reactions(base_url: &str, owner: &str, repo: &str, number: i64) -> Reactions {

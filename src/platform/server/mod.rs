@@ -60,7 +60,8 @@ pub async fn build_app(
         jwt_secret,
         google_client_id,
         apple_app_id,
-        test_bypass_secret: std::env::var("XTALK_TEST_BYPASS_SECRET")
+        test_bypass_secret: std::env::var("ATRIUM_TEST_BYPASS_SECRET")
+            .or_else(|_| std::env::var("XTALK_TEST_BYPASS_SECRET"))
             .ok()
             .filter(|v| !v.trim().is_empty()),
     };
@@ -191,4 +192,100 @@ fn header_value(headers: &HeaderMap, name: header::HeaderName) -> Option<String>
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        extract::State,
+        http::Request as HttpRequest,
+    };
+
+    use super::{
+        dispatch, resolve_request_user, AppRouter, AppState, CommentCache, ReqwestHttpClient,
+        SqliteDatabase,
+    };
+    use crate::{auth::hash_token, db::{Database, DbValue}};
+
+    async fn make_db() -> (tempfile::TempPath, Arc<SqliteDatabase>) {
+        let db_file = tempfile::NamedTempFile::new().expect("temp file").into_temp_path();
+        let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("db init");
+        (db_file, Arc::new(db))
+    }
+
+    async fn make_state() -> (tempfile::TempPath, AppState) {
+        let (db_file, db) = make_db().await;
+        let http = ReqwestHttpClient::new().expect("http");
+        let state = AppState {
+            db,
+            http: Arc::new(http),
+            cache: Arc::new(CommentCache::new(100, 60)),
+            router: Arc::new(AppRouter::new()),
+            base_url: "http://localhost".to_string(),
+            token_cache_ttl: 3600,
+            jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
+            google_client_id: None,
+            apple_app_id: None,
+            test_bypass_secret: None,
+        };
+        (db_file, state)
+    }
+
+    #[tokio::test]
+    async fn resolve_request_user_supports_github_bearer() {
+        let (_db_file, state) = make_state().await;
+        state
+            .db
+            .execute(
+                "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES \
+                 (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+                &[
+                    DbValue::Integer(42),
+                    DbValue::Text("alice".to_string()),
+                    DbValue::Text("alice@test.com".to_string()),
+                    DbValue::Text("https://avatars/a".to_string()),
+                    DbValue::Text("User".to_string()),
+                    DbValue::Integer(0),
+                ],
+            )
+            .await
+            .expect("insert user");
+        state
+            .db
+            .execute(
+                "INSERT INTO token_cache (token_hash, provider, user_id, cached_at, expires_at) VALUES (?1, 'github', ?2, datetime('now'), datetime('now', '+3600 seconds'))",
+                &[
+                    DbValue::Text(hash_token("gh-token")),
+                    DbValue::Integer(42),
+                ],
+            )
+            .await
+            .expect("insert token cache");
+
+        let user = resolve_request_user("/repos/o/r/issues", Some("Bearer gh-token"), &state)
+            .await
+            .expect("resolve user")
+            .expect("has user");
+        assert_eq!(user.login, "alice");
+    }
+
+    #[tokio::test]
+    async fn dispatch_turns_errors_into_http_response() {
+        let (_db_file, state) = make_state().await;
+        let req = HttpRequest::builder()
+            .method("GET")
+            .uri("/repos/o/r/issues")
+            .header("Authorization", "Basic invalid")
+            .body(Body::empty())
+            .expect("request");
+
+        let resp = dispatch(State(state), req).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
 }

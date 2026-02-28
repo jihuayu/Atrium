@@ -150,7 +150,7 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("origin".to_string(), "https://example.com".to_string());
-        headers.insert("user-agent".to_string(), "xtalk-test".to_string());
+        headers.insert("user-agent".to_string(), "atrium-test".to_string());
 
         let req = AppRequest {
             method: "POST".to_string(),
@@ -188,10 +188,95 @@ mod tests {
         );
         assert_eq!(
             seen_headers.get("user-agent").map(String::as_str),
-            Some("xtalk-test")
+            Some("atrium-test")
         );
 
         let seen_body = http.seen_body.lock().expect("lock body").clone();
         assert_eq!(seen_body, br#"{"repo":"o/r"}"#);
+    }
+
+    #[tokio::test]
+    async fn proxy_token_defaults_content_type_and_exercises_noop_paths() {
+        let db = NoopDb;
+        let http = MockHttp::new();
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: false,
+            test_bypass_secret: None,
+        };
+
+        let mut headers = HashMap::new();
+        headers.insert("referer".to_string(), "https://example.com".to_string());
+        headers.insert("origin".to_string(), "https://example.com".to_string());
+        let req = AppRequest {
+            method: "POST".to_string(),
+            path: "/api/utterances/token".to_string(),
+            path_params: HashMap::new(),
+            query: HashMap::new(),
+            headers,
+            auth_header: None,
+            accept: None,
+            body: Bytes::from_static(br#"{}"#),
+        };
+
+        let resp = super::proxy_token(req, &ctx).await;
+        assert_eq!(resp.status, 202);
+        let seen_headers = http
+            .seen_headers
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("seen headers");
+        assert_eq!(
+            seen_headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+
+        let exec_err = db
+            .execute("SELECT 1", &[])
+            .await
+            .err()
+            .expect("noop execute");
+        assert_eq!(exec_err.status, 500);
+        let opt_err = db
+            .query_opt_value("SELECT 1", &[])
+            .await
+            .err()
+            .expect("noop opt");
+        assert_eq!(opt_err.status, 500);
+        let all_err = db
+            .query_all_value("SELECT 1", &[])
+            .await
+            .err()
+            .expect("noop all");
+        assert_eq!(all_err.status, 500);
+        let batch_err = db
+            .batch(Vec::new())
+            .await
+            .err()
+            .expect("noop batch");
+        assert_eq!(batch_err.status, 500);
+
+        let gh_err = http
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("noop github");
+        assert_eq!(gh_err.status, 500);
+        let jwks_err = http
+            .get_jwks("https://example.com/jwks")
+            .await
+            .err()
+            .expect("noop jwks");
+        assert_eq!(jwks_err.status, 500);
     }
 }

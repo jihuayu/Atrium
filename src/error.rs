@@ -103,3 +103,42 @@ impl axum::response::IntoResponse for ApiError {
         (status, axum::Json(self.body)).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+
+    #[test]
+    fn to_native_response_maps_statuses() {
+        let not_found = ApiError::not_found("Issue").to_native_response();
+        assert_eq!(not_found["error"], "not_found");
+
+        let internal = ApiError::new(599, "x").to_native_response();
+        assert_eq!(internal["error"], "internal_error");
+    }
+
+    #[test]
+    fn display_and_from_serde_error_work() {
+        let err = ApiError::forbidden("denied");
+        assert_eq!(format!("{}", err), "denied");
+
+        let serde_err = serde_json::from_str::<serde_json::Value>("not-json").unwrap_err();
+        let converted = ApiError::from(serde_err);
+        assert_eq!(converted.status, 500);
+        assert!(converted.body.message.contains("serialization error"));
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn into_response_uses_status_and_body() {
+        use axum::response::IntoResponse;
+
+        let resp = ApiError::validation("Issue", "title", "missing_field").into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(json["message"], "Validation Failed");
+    }
+}

@@ -99,3 +99,127 @@ async fn compat_issue_close_and_soft_delete_behaviors() {
         .unwrap();
     assert_eq!(get_after_delete.status(), 404);
 }
+
+#[tokio::test]
+async fn compat_issue_filters_and_validation_paths() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "compat-issues-filters";
+
+    let alice_number = fixtures::seed_issue(&app, &app.as_alice(), owner, repo, "alice issue").await;
+    let _bob_number = fixtures::seed_issue(&app, &app.as_bob(), owner, repo, "bob issue").await;
+
+    let bad_create = app
+        .as_alice()
+        .post(&app.url(&format!("/repos/{}/{}/issues", owner, repo)))
+        .json(&serde_json::json!({"title": "   "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_create.status(), 422);
+
+    let with_labels = app
+        .as_alice()
+        .post(&app.url(&format!("/repos/{}/{}/issues", owner, repo)))
+        .json(&serde_json::json!({"title": "with labels", "labels": ["enhancement"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(with_labels.status(), 201);
+
+    let close_and_label = app
+        .as_alice()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .json(&serde_json::json!({
+            "state": "closed",
+            "state_reason": "completed",
+            "labels": ["bug"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(close_and_label.status(), 200);
+
+    let by_creator = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/repos/{}/{}/issues?state=all&creator=alice",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(by_creator.status(), 200);
+    let by_creator_payload: serde_json::Value = by_creator.json().await.unwrap();
+    assert!(by_creator_payload
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["number"].as_i64() == Some(alice_number)));
+
+    let by_label = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/repos/{}/{}/issues?state=all&labels=bug",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(by_label.status(), 200);
+    let by_label_payload: serde_json::Value = by_label.json().await.unwrap();
+    assert!(by_label_payload.as_array().unwrap().iter().any(|v| {
+        v["number"].as_i64() == Some(alice_number)
+    }));
+
+    let since_future = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/repos/{}/{}/issues?since=2999-01-01T00:00:00Z",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(since_future.status(), 200);
+    let since_payload: serde_json::Value = since_future.json().await.unwrap();
+    assert_eq!(since_payload.as_array().map(|v| v.len()), Some(0));
+
+    let invalid_state = app
+        .as_alice()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .json(&serde_json::json!({"state": "invalid-state"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_state.status(), 422);
+
+    let empty_title = app
+        .as_alice()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .json(&serde_json::json!({"title": "   "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(empty_title.status(), 422);
+
+    let update_body = app
+        .as_alice()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .json(&serde_json::json!({"body": "updated body"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(update_body.status(), 200);
+
+    let reopen = app
+        .as_alice()
+        .patch(&app.url(&format!("/repos/{}/{}/issues/{}", owner, repo, alice_number)))
+        .json(&serde_json::json!({"state": "open"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reopen.status(), 200);
+    let reopen_body: serde_json::Value = reopen.json().await.unwrap();
+    assert!(reopen_body["closed_at"].is_null());
+}

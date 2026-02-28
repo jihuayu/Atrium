@@ -7,7 +7,7 @@ async fn root_and_markdown_endpoints_work() {
     let root = app.as_anon().get(&app.url("/")).send().await.unwrap();
     assert_eq!(root.status(), 200);
     let root_text = root.text().await.unwrap();
-    assert!(root_text.contains("xtalk"));
+    assert!(root_text.contains("Atrium"));
 
     let markdown = app
         .as_anon()

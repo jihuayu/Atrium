@@ -37,7 +37,7 @@ impl WorkerState {
                 env.var("JWT_SECRET")
                     .map(|v| parse_secret_bytes(&v.to_string()))
             })
-            .unwrap_or_else(|_| b"xtalk-dev-secret-change-me".to_vec());
+            .unwrap_or_else(|_| b"atrium-dev-secret-change-me".to_vec());
         let google_client_id = env
             .var("GOOGLE_CLIENT_ID")
             .ok()
@@ -49,7 +49,8 @@ impl WorkerState {
             .map(|v| v.to_string())
             .filter(|v| !v.trim().is_empty());
         let test_bypass_secret = env
-            .var("XTALK_TEST_BYPASS_SECRET")
+            .var("ATRIUM_TEST_BYPASS_SECRET")
+            .or_else(|_| env.var("XTALK_TEST_BYPASS_SECRET"))
             .ok()
             .map(|v| v.to_string())
             .filter(|v| !v.trim().is_empty());

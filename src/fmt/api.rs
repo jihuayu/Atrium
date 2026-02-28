@@ -71,3 +71,51 @@ pub fn to_native_reactions(reactions: &Reactions) -> NativeReactionSummary {
         total: reactions.total_count,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::to_native_thread;
+    use crate::types::{ApiUser, IssueResponse, Label, Reactions};
+
+    #[test]
+    fn to_native_thread_maps_labels() {
+        let issue = IssueResponse {
+            id: 1,
+            node_id: "n".to_string(),
+            number: 1,
+            title: "t".to_string(),
+            body: Some("b".to_string()),
+            body_html: Some("<p>b</p>".to_string()),
+            state: "open".to_string(),
+            locked: false,
+            user: ApiUser {
+                login: "alice".to_string(),
+                id: 2,
+                avatar_url: "https://avatars/a".to_string(),
+                html_url: "https://github.com/alice".to_string(),
+                r#type: "User".to_string(),
+            },
+            labels: vec![Label {
+                id: 9,
+                name: "bug".to_string(),
+                color: "d73a4a".to_string(),
+                description: String::new(),
+            }],
+            comments: 0,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            closed_at: None,
+            author_association: "NONE".to_string(),
+            reactions: Reactions::default(),
+            url: String::new(),
+            html_url: String::new(),
+            comments_url: String::new(),
+        };
+
+        let native = to_native_thread(&issue);
+        assert_eq!(native.labels.len(), 1);
+        assert_eq!(native.labels[0].id, 9);
+        assert_eq!(native.labels[0].name, "bug");
+        assert_eq!(native.labels[0].color, "d73a4a");
+    }
+}

@@ -13,7 +13,7 @@ pub mod services;
 pub mod types;
 
 #[cfg(all(test, feature = "server", feature = "test-utils"))]
-extern crate self as xtalk;
+extern crate self as atrium;
 
 #[cfg(all(test, feature = "server", feature = "test-utils"))]
 #[path = "../tests/common/mod.rs"]

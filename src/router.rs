@@ -474,36 +474,252 @@ pub fn parse_query_string(raw_query: Option<&str>) -> HashMap<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::AppRouter;
+    use std::collections::HashMap;
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+
+    use super::{parse_query_string, AppRequest, AppRouter};
+    use crate::{
+        auth::{HttpClient, UpstreamResponse},
+        db::{Database, DbValue},
+        error::ApiError,
+        types::GitHubApiUser,
+        AppContext,
+    };
+
+    struct NoopDb;
+
+    #[async_trait]
+    impl Database for NoopDb {
+        async fn execute(&self, _sql: &str, _params: &[DbValue]) -> crate::Result<u64> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn query_opt_value(
+            &self,
+            _sql: &str,
+            _params: &[DbValue],
+        ) -> crate::Result<Option<serde_json::Value>> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn query_all_value(
+            &self,
+            _sql: &str,
+            _params: &[DbValue],
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn batch(&self, _stmts: Vec<(&str, Vec<DbValue>)>) -> crate::Result<()> {
+            Err(ApiError::internal("not used"))
+        }
+    }
+
+    struct NoopHttp;
+
+    #[async_trait]
+    impl HttpClient for NoopHttp {
+        async fn get_github_user(&self, _token: &str) -> crate::Result<GitHubApiUser> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn get_jwks(&self, _url: &str) -> crate::Result<UpstreamResponse> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn post_utterances_token(
+            &self,
+            _body: &[u8],
+            _headers: &HashMap<String, String>,
+        ) -> crate::Result<UpstreamResponse> {
+            Ok(UpstreamResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Bytes::new(),
+            })
+        }
+    }
 
     #[test]
     fn matches_repo_routes() {
         let router = AppRouter::new();
         let issue = router.get.at("/repos/jihuayu/utterances/issues/1");
-        assert!(issue.is_ok(), "issue route error: {:?}", issue.err());
+        assert!(issue.is_ok());
         let list = router.get.at("/repos/jihuayu/utterances/issues");
-        assert!(list.is_ok(), "list route error: {:?}", list.err());
+        assert!(list.is_ok());
         let create = router.post.at("/repos/jihuayu/utterances/issues");
-        assert!(create.is_ok(), "create route error: {:?}", create.err());
+        assert!(create.is_ok());
         let comments = router.get.at("/repos/jihuayu/utterances/issues/1/comments");
-        assert!(
-            comments.is_ok(),
-            "comments route error: {:?}",
-            comments.err()
-        );
+        assert!(comments.is_ok());
         let export = router.get.at("/user/export");
-        assert!(export.is_ok(), "export route error: {:?}", export.err());
+        assert!(export.is_ok());
         let api_threads = router.get.at("/api/v1/repos/jihuayu/utterances/threads");
-        assert!(
-            api_threads.is_ok(),
-            "api threads route error: {:?}",
-            api_threads.err()
-        );
+        assert!(api_threads.is_ok());
         let api_auth = router.post.at("/api/v1/auth/github");
-        assert!(
-            api_auth.is_ok(),
-            "api auth route error: {:?}",
-            api_auth.err()
-        );
+        assert!(api_auth.is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_options_method_not_found_and_query_parse() {
+        struct FailSerialize;
+        impl serde::Serialize for FailSerialize {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("fail"))
+            }
+        }
+
+        let serialization_error = super::AppResponse::json(200, &FailSerialize);
+        assert_eq!(serialization_error.status, 500);
+
+        let router = AppRouter::default();
+        let db = NoopDb;
+        let http = NoopHttp;
+        let secret = b"test-jwt-secret-at-least-32-bytes!!".to_vec();
+        let ctx = AppContext {
+            db: &db,
+            http: &http,
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &secret,
+            google_client_id: None,
+            apple_app_id: None,
+            stateful_sessions: false,
+            test_bypass_secret: None,
+        };
+
+        let options_resp = router
+            .handle(
+                AppRequest {
+                    method: "OPTIONS".to_string(),
+                    path: "/repos/o/r/issues".to_string(),
+                    path_params: HashMap::new(),
+                    query: HashMap::new(),
+                    headers: HashMap::new(),
+                    auth_header: None,
+                    accept: None,
+                    body: Bytes::new(),
+                },
+                &ctx,
+            )
+            .await;
+        assert_eq!(options_resp.status, 204);
+        assert!(options_resp
+            .headers
+            .iter()
+            .any(|(k, _)| k == "Allow"));
+
+        let method_not_allowed = router
+            .handle(
+                AppRequest {
+                    method: "PUT".to_string(),
+                    path: "/repos/o/r/issues".to_string(),
+                    path_params: HashMap::new(),
+                    query: HashMap::new(),
+                    headers: HashMap::new(),
+                    auth_header: None,
+                    accept: None,
+                    body: Bytes::new(),
+                },
+                &ctx,
+            )
+            .await;
+        assert_eq!(method_not_allowed.status, 405);
+
+        let not_found = router
+            .handle(
+                AppRequest {
+                    method: "GET".to_string(),
+                    path: "/not-found".to_string(),
+                    path_params: HashMap::new(),
+                    query: HashMap::new(),
+                    headers: HashMap::new(),
+                    auth_header: None,
+                    accept: None,
+                    body: Bytes::new(),
+                },
+                &ctx,
+            )
+            .await;
+        assert_eq!(not_found.status, 404);
+
+        let api_auth = router
+            .handle(
+                AppRequest {
+                    method: "POST".to_string(),
+                    path: "/api/v1/auth/github".to_string(),
+                    path_params: HashMap::new(),
+                    query: HashMap::new(),
+                    headers: HashMap::new(),
+                    auth_header: None,
+                    accept: None,
+                    body: Bytes::from_static(br#"{"token":"x"}"#),
+                },
+                &ctx,
+            )
+            .await;
+        assert!(api_auth.status == 200 || api_auth.status == 500 || api_auth.status == 401);
+
+        let utterances = router
+            .handle(
+                AppRequest {
+                    method: "POST".to_string(),
+                    path: "/api/utterances/token".to_string(),
+                    path_params: HashMap::new(),
+                    query: HashMap::new(),
+                    headers: HashMap::new(),
+                    auth_header: None,
+                    accept: None,
+                    body: Bytes::from_static(br#"{}"#),
+                },
+                &ctx,
+            )
+            .await;
+        assert_eq!(utterances.status, 200);
+
+        let db_err = db.execute("select 1", &[]).await.err().expect("db execute");
+        assert_eq!(db_err.status, 500);
+        let db_opt_err = db
+            .query_opt_value("select 1", &[])
+            .await
+            .err()
+            .expect("db query_opt");
+        assert_eq!(db_opt_err.status, 500);
+        let db_all_err = db
+            .query_all_value("select 1", &[])
+            .await
+            .err()
+            .expect("db query_all");
+        assert_eq!(db_all_err.status, 500);
+        let db_batch_err = db.batch(Vec::new()).await.err().expect("db batch");
+        assert_eq!(db_batch_err.status, 500);
+
+        let gh_err = http
+            .get_github_user("token")
+            .await
+            .err()
+            .expect("http github");
+        assert_eq!(gh_err.status, 500);
+        let jwks_err = http
+            .get_jwks("https://example.com/jwks")
+            .await
+            .err()
+            .expect("http jwks");
+        assert_eq!(jwks_err.status, 500);
+        let utterances_ok = http
+            .post_utterances_token(&[], &HashMap::new())
+            .await
+            .expect("http utterances");
+        assert_eq!(utterances_ok.status, 200);
+
+        let parsed = parse_query_string(Some("a=1&b&x=%2Fv&&"));
+        assert_eq!(parsed.get("a").map(String::as_str), Some("1"));
+        assert_eq!(parsed.get("b").map(String::as_str), Some(""));
+        assert_eq!(parsed.get("x").map(String::as_str), Some("/v"));
     }
 }

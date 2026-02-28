@@ -128,3 +128,67 @@ async fn native_export_validates_query_params() {
         .unwrap();
     assert_eq!(bad_since.status(), 400);
 }
+
+#[tokio::test]
+async fn native_export_includes_labels_and_threads_without_comments() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-export-labels-empty";
+
+    let no_comment_number =
+        fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "thread-no-comment").await;
+    let with_comment_number =
+        fixtures::seed_issue(&app, &app.as_admin(), owner, repo, "thread-with-comment").await;
+    let _ = fixtures::seed_comment(
+        &app,
+        &app.as_alice(),
+        owner,
+        repo,
+        with_comment_number,
+        "hello",
+    )
+    .await;
+
+    let label_patch = app
+        .as_admin()
+        .patch(&app.url(&format!(
+            "/repos/{}/{}/issues/{}",
+            owner, repo, no_comment_number
+        )))
+        .json(&serde_json::json!({"labels": ["bug"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(label_patch.status(), 200);
+
+    let json_resp = app
+        .as_admin()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/export?format=json",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(json_resp.status(), 200);
+    let json_body: serde_json::Value = json_resp.json().await.unwrap();
+    assert!(json_body["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["name"] == "bug"));
+
+    let csv_resp = app
+        .as_admin()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/export?format=csv",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(csv_resp.status(), 200);
+    let csv_text = csv_resp.text().await.unwrap();
+    assert!(csv_text.contains("thread-no-comment"));
+    assert!(csv_text.contains("thread-with-comment"));
+}
