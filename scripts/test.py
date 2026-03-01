@@ -31,6 +31,8 @@ SHELL = sys.platform == "win32"
 
 # npx -y 跳过 "Need to install..." 安装确认提示
 NPX = ["npx", "-y"]
+# Pin wrangler major to avoid npm/npx resolution drift on newer Node/npm.
+WRANGLER = "wrangler@4"
 
 
 def kill_port_holders(port: int) -> None:
@@ -171,7 +173,7 @@ def run_worker_tests(extra: list[str]) -> None:
         run(
             NPX
             + [
-                "wrangler",
+                WRANGLER,
                 "d1",
                 "execute",
                 "DB",
@@ -194,7 +196,7 @@ def run_worker_tests(extra: list[str]) -> None:
         wrangler_proc = subprocess.Popen(
             NPX
             + [
-                "wrangler",
+                WRANGLER,
                 "dev",
                 "--config",
                 temp_cfg_path,

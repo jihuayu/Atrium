@@ -5,12 +5,12 @@ use base64::Engine;
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
-    router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     AppContext,
+    auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
+    router::{AppRequest, AppResponse, AppRouter, parse_query_string},
 };
 #[cfg(target_arch = "wasm32")]
-use worker::{event, Context, Env, Method, Request, Response, Result};
+use worker::{Context, Env, Method, Request, Response, Result, event};
 
 #[cfg(target_arch = "wasm32")]
 use self::{d1::D1Db, http::WorkerHttpClient};
@@ -99,11 +99,10 @@ async fn dispatch(
 ) -> crate::Result<AppResponse> {
     let app_req = to_app_request(req).await?;
 
-    let db = D1Db {
-        db: env
-            .d1("DB")
+    let db = D1Db::from_database(
+        env.d1("DB")
             .map_err(|e| crate::ApiError::internal(format!("missing D1 binding DB: {}", e)))?,
-    };
+    )?;
     let http = WorkerHttpClient;
 
     if let Some(header) = app_req.auth_header.as_deref() {
@@ -245,7 +244,7 @@ fn parse_secret_bytes(value: &str) -> Vec<u8> {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{parse_secret_bytes, WorkerState};
+    use super::{WorkerState, parse_secret_bytes};
 
     #[test]
     fn parse_secret_bytes_supports_standard_urlsafe_and_plain() {

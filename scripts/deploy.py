@@ -28,6 +28,7 @@ WORKER_DIR = PROJECT_ROOT / "deploy" / "worker"
 # Windows 上 npx/npm 是 .cmd 批处理
 SHELL = sys.platform == "win32"
 NPX = ["npx", "-y"]
+WRANGLER = "wrangler@4"
 
 
 def safe_print(text: str) -> None:
@@ -63,7 +64,7 @@ def step_migrate(dry_run: bool = False) -> None:
     # 先查看待执行的迁移
     print("  Checking pending migrations...")
     result = subprocess.run(
-        NPX + ["wrangler", "d1", "migrations", "list", "DB",
+        NPX + [WRANGLER, "d1", "migrations", "list", "DB",
                "--config", str(WORKER_DIR / "wrangler.toml"), "--remote"],
         cwd=WORKER_DIR,
         shell=SHELL,
@@ -85,7 +86,7 @@ def step_migrate(dry_run: bool = False) -> None:
     # 执行迁移
     print("  Applying migrations to remote D1...")
     run(
-        NPX + ["wrangler", "d1", "migrations", "apply", "DB",
+        NPX + [WRANGLER, "d1", "migrations", "apply", "DB",
                "--config", str(WORKER_DIR / "wrangler.toml"), "--remote"],
         cwd=WORKER_DIR,
     )
@@ -96,11 +97,11 @@ def step_deploy(dry_run: bool = False) -> None:
     banner("Step 3: Deploy Worker")
 
     if dry_run:
-        print("  [dry-run] Would run: npx wrangler deploy")
+        print("  [dry-run] Would run: npx wrangler@4 deploy")
         return
 
     run(
-        NPX + ["wrangler", "deploy", "--config", str(WORKER_DIR / "wrangler.toml")],
+        NPX + [WRANGLER, "deploy", "--config", str(WORKER_DIR / "wrangler.toml")],
         cwd=WORKER_DIR,
     )
     print("  Worker deployed.")
