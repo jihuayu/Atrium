@@ -2,6 +2,9 @@ name = "atrium"
 main = "../../build/worker/shim.mjs"
 compatibility_date = "2024-09-23"
 
+[placement]
+mode = "smart"
+
 [build]
 command = "cargo install -q worker-build && worker-build --profile release-wasm --features worker"
 cwd = "../.."
