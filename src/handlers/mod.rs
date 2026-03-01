@@ -119,6 +119,7 @@ pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
         "  POST   /api/v1/auth/refresh\n",
         "  DELETE /api/v1/auth/session\n",
         "  GET    /api/v1/auth/me\n",
+        "  POST   /api/v1/repos\n",
         "  GET    /api/v1/repos/{owner}/{repo}/threads\n",
         "  POST   /api/v1/repos/{owner}/{repo}/threads\n",
         "  GET    /api/v1/repos/{owner}/{repo}/threads/{number}\n",

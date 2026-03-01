@@ -33,6 +33,7 @@ struct IssueRow {
     repo_id: i64,
     repo_owner: String,
     repo_name: String,
+    owner_user_id: Option<i64>,
     admin_user_id: Option<i64>,
 }
 
@@ -114,8 +115,8 @@ pub async fn get_issue(
     repo_name: &str,
     number: i64,
 ) -> Result<IssueResponse> {
-    let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
-    let row = fetch_issue_row(ctx, owner, repo_name, number)
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
+    let row = fetch_issue_row(ctx, repo_row.id, number)
         .await?
         .ok_or_else(|| ApiError::not_found("Issue"))?;
     build_issue_response(ctx, &row).await
@@ -127,7 +128,7 @@ pub async fn list_issues(
     repo_name: &str,
     query: &ListIssuesQuery,
 ) -> Result<(Vec<IssueResponse>, i64, i64, i64)> {
-    let repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
+    let repo = repo::get_repo(ctx, owner, repo_name).await?;
     let (page, per_page, offset) = normalize_pagination(query.page, query.per_page);
 
     let mut filters = vec![
@@ -200,7 +201,7 @@ pub async fn list_issues(
         "SELECT \
             i.id, i.number, i.title, i.body, i.state, i.locked, i.user_id, i.comment_count, i.created_at, i.updated_at, i.closed_at, \
             u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
-            r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.admin_user_id \
+            r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id \
          FROM issues i \
          JOIN users u ON u.id = i.user_id \
          JOIN repos r ON r.id = i.repo_id \
@@ -232,7 +233,8 @@ pub async fn update_issue(
     input: &UpdateIssueInput,
 ) -> Result<IssueResponse> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
-    let row = fetch_issue_row(ctx, owner, repo_name, number)
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
+    let row = fetch_issue_row(ctx, repo_row.id, number)
         .await?
         .ok_or_else(|| ApiError::not_found("Issue"))?;
 
@@ -324,8 +326,7 @@ pub async fn set_issue_labels(
 
 async fn fetch_issue_row(
     ctx: &AppContext<'_>,
-    owner: &str,
-    repo_name: &str,
+    repo_id: i64,
     number: i64,
 ) -> Result<Option<IssueRow>> {
     db::query_opt::<IssueRow>(
@@ -333,14 +334,13 @@ async fn fetch_issue_row(
             "SELECT \
                 i.id, i.number, i.title, i.body, i.state, i.locked, i.user_id, i.comment_count, i.created_at, i.updated_at, i.closed_at, \
                 u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
-                r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.admin_user_id \
+                r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id \
              FROM issues i \
              JOIN users u ON u.id = i.user_id \
              JOIN repos r ON r.id = i.repo_id \
-             WHERE r.owner = ?1 AND r.name = ?2 AND i.number = ?3 AND i.deleted_at IS NULL",
+             WHERE i.repo_id = ?1 AND i.number = ?2 AND i.deleted_at IS NULL",
             &[
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
+                DbValue::Integer(repo_id),
                 DbValue::Integer(number),
             ],
         )
@@ -392,6 +392,7 @@ async fn build_issue_response(ctx: &AppContext<'_>, row: &IssueRow) -> Result<Is
         id: row.repo_id,
         owner: row.repo_owner.clone(),
         name: row.repo_name.clone(),
+        owner_user_id: row.owner_user_id,
         admin_user_id: row.admin_user_id,
         issue_counter: 0,
     };

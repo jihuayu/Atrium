@@ -77,7 +77,7 @@ async fn ensure_repo_admin(
     repo: &str,
 ) -> crate::Result<crate::types::RepoRow> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
-    let repo_row = services::repo::ensure_repo(ctx, owner, repo, Some(actor)).await?;
+    let repo_row = services::repo::get_repo(ctx, owner, repo).await?;
     if repo_row.admin_user_id != Some(actor.id) {
         return Err(ApiError::forbidden("Admin required"));
     }

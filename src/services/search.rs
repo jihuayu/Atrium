@@ -40,7 +40,15 @@ pub async fn search_issues(
     let mut idx = 1;
 
     if let (Some(owner), Some(repo)) = (&parsed.repo_owner, &parsed.repo_name) {
-        filters.push(format!("r.owner = ?{}", idx));
+        filters.push(format!(
+            "(lower(r.owner) = lower(?{0}) OR r.owner_user_id = ( \
+                SELECT u.id FROM users u \
+                JOIN user_identities ui ON ui.user_id = u.id \
+                WHERE ui.provider = 'github' AND lower(u.login) = lower(?{0}) \
+                LIMIT 1 \
+            ))",
+            idx
+        ));
         params.push(DbValue::Text(owner.clone()));
         idx += 1;
 

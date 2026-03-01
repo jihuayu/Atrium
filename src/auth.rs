@@ -373,6 +373,20 @@ pub async fn upsert_auth_user(db: &dyn Database, user: &crate::types::AuthUser) 
         ],
     )
     .await?;
+
+    db.execute(
+        "INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at) \
+         VALUES (?1, 'github', ?2, ?3, ?4, datetime('now')) \
+         ON CONFLICT(provider, provider_user_id) DO UPDATE SET \
+         user_id = excluded.user_id, email = excluded.email, avatar_url = excluded.avatar_url, cached_at = datetime('now')",
+        &[
+            DbValue::Integer(user.id),
+            DbValue::Text(user.id.to_string()),
+            DbValue::Text(user.email.clone()),
+            DbValue::Text(user.avatar_url.clone()),
+        ],
+    )
+    .await?;
     Ok(())
 }
 

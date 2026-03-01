@@ -213,6 +213,7 @@ pub struct RepoRow {
     pub id: i64,
     pub owner: String,
     pub name: String,
+    pub owner_user_id: Option<i64>,
     pub admin_user_id: Option<i64>,
     pub issue_counter: i64,
 }
@@ -386,6 +387,7 @@ pub struct RefreshTokenInput {
 pub struct NativeRepoSettings {
     pub owner: String,
     pub name: String,
+    pub owner_user_id: Option<i64>,
     pub admin_user_id: Option<i64>,
     pub issue_counter: i64,
 }
@@ -393,6 +395,11 @@ pub struct NativeRepoSettings {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateRepoSettingsInput {
     pub admin_user_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRepoInput {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +421,7 @@ pub struct ExportRepoRow {
     pub id: i64,
     pub owner: String,
     pub name: String,
+    pub owner_user_id: Option<i64>,
     pub admin_user_id: Option<i64>,
     pub issue_counter: i64,
     pub created_at: String,

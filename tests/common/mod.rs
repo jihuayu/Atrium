@@ -62,8 +62,11 @@ impl TestApp {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "atrium-test-bypass-secret".to_string());
-        std::env::set_var("ATRIUM_TEST_BYPASS_SECRET", &secret);
-        std::env::set_var("XTALK_TEST_BYPASS_SECRET", &secret);
+        // SAFETY: test helper writes process env in a controlled test context.
+        unsafe {
+            std::env::set_var("ATRIUM_TEST_BYPASS_SECRET", &secret);
+            std::env::set_var("XTALK_TEST_BYPASS_SECRET", &secret);
+        }
 
         let db_file = tempfile::NamedTempFile::new().unwrap().into_temp_path();
         let db_path = db_file.to_string_lossy().replace('\\', "/");

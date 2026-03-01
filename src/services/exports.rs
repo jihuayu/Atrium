@@ -10,7 +10,8 @@ use crate::{
     AppContext, Result,
 };
 
-const REPO_SCOPE_SQL: &str = "SELECT id FROM repos WHERE owner = ?1 OR admin_user_id = ?2";
+const REPO_SCOPE_SQL: &str =
+    "SELECT id FROM repos WHERE lower(owner) = lower(?1) OR owner_user_id = ?2 OR admin_user_id = ?2";
 
 #[derive(Debug, Deserialize)]
 struct ExportedAtRow {
@@ -32,9 +33,9 @@ pub async fn export_user_repos(ctx: &AppContext<'_>) -> Result<RepoExportRespons
 
     let repos = db::query_all::<ExportRepoRow>(
         ctx.db,
-        "SELECT id, owner, name, admin_user_id, issue_counter, created_at \
+        "SELECT id, owner, name, owner_user_id, admin_user_id, issue_counter, created_at \
          FROM repos \
-         WHERE owner = ?1 OR admin_user_id = ?2 \
+         WHERE lower(owner) = lower(?1) OR owner_user_id = ?2 OR admin_user_id = ?2 \
          ORDER BY id ASC",
         &params,
     )
@@ -93,7 +94,9 @@ pub async fn export_user_repos(ctx: &AppContext<'_>) -> Result<RepoExportRespons
         "SELECT DISTINCT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin, u.cached_at \
          FROM users u \
          WHERE u.id IN ( \
-             SELECT admin_user_id FROM repos WHERE (owner = ?1 OR admin_user_id = ?2) AND admin_user_id IS NOT NULL \
+             SELECT admin_user_id FROM repos WHERE (lower(owner) = lower(?1) OR owner_user_id = ?2 OR admin_user_id = ?2) AND admin_user_id IS NOT NULL \
+             UNION \
+             SELECT owner_user_id FROM repos WHERE (lower(owner) = lower(?1) OR owner_user_id = ?2 OR admin_user_id = ?2) AND owner_user_id IS NOT NULL \
              UNION \
              SELECT i.user_id FROM issues i WHERE i.repo_id IN ({0}) \
              UNION \

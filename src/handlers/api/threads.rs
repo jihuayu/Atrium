@@ -33,7 +33,7 @@ async fn list_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppR
         direction: query_value(&req, "direction"),
     };
 
-    let _repo = services::repo::ensure_repo(ctx, &owner, &repo, ctx.user).await?;
+    let _repo = services::repo::get_repo(ctx, &owner, &repo).await?;
 
     let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let direction = query.direction.unwrap_or_else(|| "desc".to_string());

@@ -127,6 +127,13 @@ async fn bootstrap_legacy_migration_state(pool: &SqlitePool) -> Result<()> {
     .await
     .map_err(|e| ApiError::internal(format!("check token_cache.provider failed: {}", e)))?
     .is_some();
+    let has_repo_owner_user_id: bool = query_scalar::<_, i64>(
+        "SELECT 1 FROM pragma_table_info('repos') WHERE name = 'owner_user_id' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("check repos.owner_user_id failed: {}", e)))?
+    .is_some();
 
     // Legacy databases that were migrated manually may already be at schema v2
     // but still miss `_sqlx_migrations`. Seed v1/v2 records so sqlx can continue
@@ -151,7 +158,12 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
     .await
     .map_err(|e| ApiError::internal(format!("create sqlx migration table failed: {}", e)))?;
 
-    for version in [1_i64, 2_i64] {
+    let mut seeded_versions = vec![1_i64, 2_i64];
+    if has_repo_owner_user_id {
+        seeded_versions.push(3);
+    }
+
+    for version in seeded_versions {
         let migration = MIGRATOR
             .iter()
             .find(|m| m.version == version)
@@ -373,9 +385,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect("apply migration 0001 manually");
-        query(include_str!(
-            "../../../migrations/0002_multi_provider_auth.sql"
-        ))
+        query(include_str!("../../../migrations/0002_multi_provider_auth.sql"))
         .execute(&pool)
         .await
         .expect("apply migration 0002 manually");
@@ -390,7 +400,7 @@ mod tests {
             .fetch_one(&verify_pool)
             .await
             .expect("count sqlx migrations");
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
         let v1: Option<i64> =
             query_scalar("SELECT 1 FROM _sqlx_migrations WHERE version = 1 LIMIT 1")
                 .fetch_optional(&verify_pool)
@@ -401,7 +411,13 @@ mod tests {
                 .fetch_optional(&verify_pool)
                 .await
                 .expect("find v2");
+        let v3: Option<i64> =
+            query_scalar("SELECT 1 FROM _sqlx_migrations WHERE version = 3 LIMIT 1")
+                .fetch_optional(&verify_pool)
+                .await
+                .expect("find v3");
         assert!(v1.is_some());
         assert!(v2.is_some());
+        assert!(v3.is_some());
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     db::{self, DbValue},
     error::ApiError,
     fmt::comment::ReactionCounts,
-    services::normalize_pagination,
+    services::{normalize_pagination, repo},
     types::{CreateReactionInput, ReactionResponse},
     AppContext, Result,
 };
@@ -27,7 +27,6 @@ struct ReactionRow {
 #[derive(Debug, Deserialize)]
 struct CommentRow {
     issue_id: i64,
-    reactions: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,16 +47,8 @@ pub async fn list_reactions(
 
     let total = db::query_opt::<CountRow>(
         ctx.db,
-        "SELECT COUNT(*) AS total \
-             FROM reactions r \
-             JOIN comments c ON c.id = r.comment_id \
-             JOIN repos rp ON rp.id = c.repo_id \
-             WHERE c.id = ?1 AND rp.owner = ?2 AND rp.name = ?3",
-        &[
-            DbValue::Integer(comment_id),
-            DbValue::Text(owner.to_string()),
-            DbValue::Text(repo_name.to_string()),
-        ],
+        "SELECT COUNT(*) AS total FROM reactions WHERE comment_id = ?1",
+        &[DbValue::Integer(comment_id)],
     )
     .await?
     .map(|v| v.total)
@@ -65,22 +56,18 @@ pub async fn list_reactions(
 
     let rows = db::query_all::<ReactionRow>(
         ctx.db,
-            "SELECT r.id, r.content, r.user_id, r.created_at, u.login, u.avatar_url, u.type AS user_type \
-             FROM reactions r \
-             JOIN users u ON u.id = r.user_id \
-             JOIN comments c ON c.id = r.comment_id \
-             JOIN repos rp ON rp.id = c.repo_id \
-             WHERE c.id = ?1 AND rp.owner = ?2 AND rp.name = ?3 \
-             ORDER BY r.id ASC \
-             LIMIT ?4 OFFSET ?5",
-            &[
-                DbValue::Integer(comment_id),
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
-                DbValue::Integer(per_page),
-                DbValue::Integer(offset),
-            ],
-        )
+        "SELECT r.id, r.content, r.user_id, r.created_at, u.login, u.avatar_url, u.type AS user_type \
+         FROM reactions r \
+         JOIN users u ON u.id = r.user_id \
+         WHERE r.comment_id = ?1 \
+         ORDER BY r.id ASC \
+         LIMIT ?2 OFFSET ?3",
+        &[
+            DbValue::Integer(comment_id),
+            DbValue::Integer(per_page),
+            DbValue::Integer(offset),
+        ],
+    )
     .await?;
 
     let items = rows
@@ -143,7 +130,7 @@ pub async fn create_reaction(
         .ok_or_else(|| ApiError::internal("reaction create failed"))?;
 
     if affected > 0 {
-        update_cached_reactions(ctx, comment_id, &input.content, 1).await?;
+        rebuild_cached_reactions(ctx, comment_id).await?;
         if let Some(cache) = ctx.comment_cache {
             cache.invalidate_issue(comment.issue_id).await?;
             cache.invalidate_comment(comment_id).await?;
@@ -178,19 +165,12 @@ pub async fn delete_reaction(
 
     let row = db::query_opt::<ReactionRow>(
         ctx.db,
-            "SELECT r.id, r.content, r.user_id, r.created_at, u.login, u.avatar_url, u.type AS user_type \
-             FROM reactions r \
-             JOIN users u ON u.id = r.user_id \
-             JOIN comments c ON c.id = r.comment_id \
-             JOIN repos rp ON rp.id = c.repo_id \
-             WHERE r.id = ?1 AND r.comment_id = ?2 AND rp.owner = ?3 AND rp.name = ?4",
-            &[
-                DbValue::Integer(reaction_id),
-                DbValue::Integer(comment_id),
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
-            ],
-        )
+        "SELECT r.id, r.content, r.user_id, r.created_at, u.login, u.avatar_url, u.type AS user_type \
+         FROM reactions r \
+         JOIN users u ON u.id = r.user_id \
+         WHERE r.id = ?1 AND r.comment_id = ?2",
+        &[DbValue::Integer(reaction_id), DbValue::Integer(comment_id)],
+    )
     .await?
         .ok_or_else(|| ApiError::not_found("Reaction"))?;
 
@@ -207,7 +187,7 @@ pub async fn delete_reaction(
         .await?;
 
     if affected > 0 {
-        update_cached_reactions(ctx, comment_id, &row.content, -1).await?;
+        rebuild_cached_reactions(ctx, comment_id).await?;
         if let Some(cache) = ctx.comment_cache {
             cache.invalidate_issue(comment.issue_id).await?;
             cache.invalidate_comment(comment_id).await?;
@@ -223,38 +203,80 @@ async fn ensure_comment(
     repo_name: &str,
     comment_id: i64,
 ) -> Result<CommentRow> {
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
+
     db::query_opt::<CommentRow>(
         ctx.db,
-        "SELECT c.id, c.issue_id, c.reactions \
-             FROM comments c \
-             JOIN repos r ON r.id = c.repo_id \
-             WHERE c.id = ?1 AND r.owner = ?2 AND r.name = ?3 AND c.deleted_at IS NULL",
+        "SELECT c.issue_id \
+         FROM comments c \
+         WHERE c.id = ?1 AND c.repo_id = ?2 AND c.deleted_at IS NULL",
         &[
             DbValue::Integer(comment_id),
-            DbValue::Text(owner.to_string()),
-            DbValue::Text(repo_name.to_string()),
+            DbValue::Integer(repo_row.id),
         ],
     )
     .await?
     .ok_or_else(|| ApiError::not_found("IssueComment"))
 }
 
-async fn update_cached_reactions(
-    ctx: &AppContext<'_>,
-    comment_id: i64,
-    content: &str,
-    delta: i64,
-) -> Result<()> {
-    let row = db::query_opt::<CommentRow>(
+async fn rebuild_cached_reactions(ctx: &AppContext<'_>, comment_id: i64) -> Result<()> {
+    #[derive(Debug, Deserialize)]
+    struct ReactionAggRow {
+        plus_one: i64,
+        minus_one: i64,
+        laugh: i64,
+        confused: i64,
+        heart: i64,
+        hooray: i64,
+        rocket: i64,
+        eyes: i64,
+    }
+
+    let row = db::query_opt::<ReactionAggRow>(
         ctx.db,
-        "SELECT issue_id, reactions FROM comments WHERE id = ?1",
+        "SELECT \
+             COALESCE(SUM(CASE WHEN content = '+1' THEN 1 ELSE 0 END), 0) AS plus_one, \
+             COALESCE(SUM(CASE WHEN content = '-1' THEN 1 ELSE 0 END), 0) AS minus_one, \
+             COALESCE(SUM(CASE WHEN content = 'laugh' THEN 1 ELSE 0 END), 0) AS laugh, \
+             COALESCE(SUM(CASE WHEN content = 'confused' THEN 1 ELSE 0 END), 0) AS confused, \
+             COALESCE(SUM(CASE WHEN content = 'heart' THEN 1 ELSE 0 END), 0) AS heart, \
+             COALESCE(SUM(CASE WHEN content = 'hooray' THEN 1 ELSE 0 END), 0) AS hooray, \
+             COALESCE(SUM(CASE WHEN content = 'rocket' THEN 1 ELSE 0 END), 0) AS rocket, \
+             COALESCE(SUM(CASE WHEN content = 'eyes' THEN 1 ELSE 0 END), 0) AS eyes \
+         FROM reactions \
+         WHERE comment_id = ?1",
         &[DbValue::Integer(comment_id)],
     )
     .await?
-    .ok_or_else(|| ApiError::not_found("IssueComment"))?;
+    .unwrap_or(ReactionAggRow {
+        plus_one: 0,
+        minus_one: 0,
+        laugh: 0,
+        confused: 0,
+        heart: 0,
+        hooray: 0,
+        rocket: 0,
+        eyes: 0,
+    });
 
-    let mut counts: ReactionCounts = serde_json::from_str(&row.reactions).unwrap_or_default();
-    counts.apply_delta(content, delta);
+    let counts = ReactionCounts {
+        plus_one: row.plus_one,
+        minus_one: row.minus_one,
+        laugh: row.laugh,
+        confused: row.confused,
+        heart: row.heart,
+        hooray: row.hooray,
+        rocket: row.rocket,
+        eyes: row.eyes,
+        total: row.plus_one
+            + row.minus_one
+            + row.laugh
+            + row.confused
+            + row.heart
+            + row.hooray
+            + row.rocket
+            + row.eyes,
+    };
 
     ctx.db
         .execute(

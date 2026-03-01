@@ -6,7 +6,7 @@ use crate::{
     handlers::{body_json, path_param},
     router::{AppRequest, AppResponse},
     services,
-    types::{NativeRepoSettings, UpdateRepoSettingsInput},
+    types::{CreateRepoInput, NativeRepoSettings, UpdateRepoSettingsInput},
     AppContext,
 };
 
@@ -26,6 +26,7 @@ async fn get_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppRe
         &NativeRepoSettings {
             owner: repo_row.owner,
             name: repo_row.name,
+            owner_user_id: repo_row.owner_user_id,
             admin_user_id: repo_row.admin_user_id,
             issue_counter: repo_row.issue_counter,
         },
@@ -34,6 +35,29 @@ async fn get_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppRe
 
 pub async fn update(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
     respond_native(update_inner(req, ctx).await)
+}
+
+pub async fn create(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
+    respond_native(create_inner(req, ctx).await)
+}
+
+async fn create_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppResponse> {
+    let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
+    let input: CreateRepoInput = body_json(&req)?;
+
+    let (repo_row, created) = services::repo::create_global_repo(ctx, actor, &input.name).await?;
+    let status = if created { 201 } else { 200 };
+
+    Ok(AppResponse::json(
+        status,
+        &NativeRepoSettings {
+            owner: repo_row.owner,
+            name: repo_row.name,
+            owner_user_id: repo_row.owner_user_id,
+            admin_user_id: repo_row.admin_user_id,
+            issue_counter: repo_row.issue_counter,
+        },
+    ))
 }
 
 async fn update_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppResponse> {
@@ -61,6 +85,7 @@ async fn update_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
         &NativeRepoSettings {
             owner: updated.owner,
             name: updated.name,
+            owner_user_id: updated.owner_user_id,
             admin_user_id: updated.admin_user_id,
             issue_counter: updated.issue_counter,
         },

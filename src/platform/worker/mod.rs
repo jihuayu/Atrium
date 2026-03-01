@@ -37,7 +37,7 @@ impl WorkerState {
         let jwt_secret = secret_lookup("JWT_SECRET")
             .or_else(|| var_lookup("JWT_SECRET"))
             .map(|v| parse_secret_bytes(&v))
-            .unwrap_or_else(|| b"atrium-dev-secret-change-me".to_vec());
+            .unwrap_or_default();
         let google_client_id = var_lookup("GOOGLE_CLIENT_ID").filter(|v| !v.trim().is_empty());
         let apple_app_id = var_lookup("APPLE_APP_ID").filter(|v| !v.trim().is_empty());
         let test_bypass_secret = var_lookup("ATRIUM_TEST_BYPASS_SECRET")
@@ -98,6 +98,10 @@ async fn dispatch(
     router: &AppRouter,
 ) -> crate::Result<AppResponse> {
     let app_req = to_app_request(req).await?;
+
+    if app_req.path.starts_with("/api/v1/") && state.jwt_secret.len() < 16 {
+        return Err(crate::ApiError::internal("JWT_SECRET is not configured"));
+    }
 
     let db = D1Db::from_database(
         env.d1("DB")
@@ -264,7 +268,7 @@ mod tests {
 
         assert_eq!(state.base_url, "http://127.0.0.1:8787");
         assert_eq!(state.token_cache_ttl, 3600);
-        assert_eq!(state.jwt_secret, b"atrium-dev-secret-change-me".to_vec());
+        assert!(state.jwt_secret.is_empty());
         assert_eq!(state.google_client_id, None);
         assert_eq!(state.apple_app_id, None);
         assert_eq!(state.test_bypass_secret, None);

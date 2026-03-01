@@ -46,17 +46,16 @@ async fn delete_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     let repo = path_param(&req, "repo")?;
     let comment_id = path_i64(&req, "id")?;
     let content = path_param(&req, "content")?;
+    let repo_row = services::repo::get_repo(ctx, &owner, &repo).await?;
 
     let row = db::query_opt::<ReactionIdRow>(
         ctx.db,
         "SELECT r.id \
          FROM reactions r \
          JOIN comments c ON c.id = r.comment_id \
-         JOIN repos rp ON rp.id = c.repo_id \
-         WHERE rp.owner = ?1 AND rp.name = ?2 AND r.comment_id = ?3 AND r.user_id = ?4 AND r.content = ?5",
+         WHERE c.repo_id = ?1 AND r.comment_id = ?2 AND r.user_id = ?3 AND r.content = ?4",
         &[
-            DbValue::Text(owner.clone()),
-            DbValue::Text(repo.clone()),
+            DbValue::Integer(repo_row.id),
             DbValue::Integer(comment_id),
             DbValue::Integer(user.id),
             DbValue::Text(content),

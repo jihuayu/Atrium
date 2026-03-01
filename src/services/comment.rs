@@ -138,26 +138,6 @@ pub async fn create_comment(
 
     let issue = resolve_issue(ctx, owner, repo_name, number).await?;
 
-    ctx.db
-        .execute(
-            "INSERT INTO comments (repo_id, issue_id, body, user_id, created_at, updated_at, reactions) \
-             VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'), '{}')",
-            &[
-                DbValue::Integer(issue.repo_id),
-                DbValue::Integer(issue.issue_id),
-                DbValue::Text(input.body.clone()),
-                DbValue::Integer(user.id),
-            ],
-        )
-        .await?;
-
-    ctx.db
-        .execute(
-            "UPDATE issues SET comment_count = comment_count + 1, updated_at = datetime('now') WHERE id = ?1",
-            &[DbValue::Integer(issue.issue_id)],
-        )
-        .await?;
-
     #[derive(Debug, Deserialize)]
     struct IdRow {
         id: i64,
@@ -165,12 +145,26 @@ pub async fn create_comment(
 
     let comment_id = db::query_opt::<IdRow>(
         ctx.db,
-        "SELECT id FROM comments WHERE issue_id = ?1 AND user_id = ?2 ORDER BY id DESC LIMIT 1",
-        &[DbValue::Integer(issue.issue_id), DbValue::Integer(user.id)],
+        "INSERT INTO comments (repo_id, issue_id, body, user_id, created_at, updated_at, reactions) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'), '{}') \
+         RETURNING id",
+        &[
+            DbValue::Integer(issue.repo_id),
+            DbValue::Integer(issue.issue_id),
+            DbValue::Text(input.body.clone()),
+            DbValue::Integer(user.id),
+        ],
     )
     .await?
-    .ok_or_else(|| ApiError::internal("comment insert verification failed"))?
+    .ok_or_else(|| ApiError::internal("comment insert failed"))?
     .id;
+
+    ctx.db
+        .execute(
+            "UPDATE issues SET comment_count = comment_count + 1, updated_at = datetime('now') WHERE id = ?1",
+            &[DbValue::Integer(issue.issue_id)],
+        )
+        .await?;
 
     if let Some(cache) = ctx.comment_cache {
         cache.invalidate_issue(issue.issue_id).await?;
@@ -186,7 +180,7 @@ pub async fn get_comment(
     repo_name: &str,
     comment_id: i64,
 ) -> Result<CommentResponse> {
-    let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
 
     if let Some(cache) = ctx.comment_cache {
         if let Some(cached) = cache.get_single(comment_id).await? {
@@ -196,7 +190,7 @@ pub async fn get_comment(
         }
     }
 
-    let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
+    let row = fetch_comment_row(ctx, repo_row.id, comment_id)
         .await?
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
@@ -224,7 +218,8 @@ pub async fn update_comment(
         ));
     }
 
-    let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
+    let row = fetch_comment_row(ctx, repo_row.id, comment_id)
         .await?
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
@@ -256,7 +251,8 @@ pub async fn delete_comment(
     comment_id: i64,
 ) -> Result<()> {
     let actor = ctx.user.ok_or_else(ApiError::unauthorized)?;
-    let row = fetch_comment_row(ctx, owner, repo_name, comment_id)
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
+    let row = fetch_comment_row(ctx, repo_row.id, comment_id)
         .await?
         .ok_or_else(|| ApiError::not_found("IssueComment"))?;
 
@@ -295,17 +291,15 @@ async fn resolve_issue(
     repo_name: &str,
     number: i64,
 ) -> Result<IssueRow> {
-    let _repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
+    let repo_row = repo::get_repo(ctx, owner, repo_name).await?;
 
     db::query_opt::<IssueRow>(
         ctx.db,
-        "SELECT i.id AS issue_id, i.number AS issue_number, i.repo_id AS repo_id \
-             FROM issues i \
-             JOIN repos r ON r.id = i.repo_id \
-             WHERE r.owner = ?1 AND r.name = ?2 AND i.number = ?3 AND i.deleted_at IS NULL",
+        "SELECT i.id AS issue_id, i.repo_id AS repo_id \
+         FROM issues i \
+         WHERE i.repo_id = ?1 AND i.number = ?2 AND i.deleted_at IS NULL",
         &[
-            DbValue::Text(owner.to_string()),
-            DbValue::Text(repo_name.to_string()),
+            DbValue::Integer(repo_row.id),
             DbValue::Integer(number),
         ],
     )
@@ -315,8 +309,7 @@ async fn resolve_issue(
 
 async fn fetch_comment_row(
     ctx: &AppContext<'_>,
-    owner: &str,
-    repo_name: &str,
+    repo_id: i64,
     comment_id: i64,
 ) -> Result<Option<CommentRow>> {
     db::query_opt::<CommentRow>(
@@ -329,11 +322,10 @@ async fn fetch_comment_row(
              JOIN users u ON u.id = c.user_id \
              JOIN issues i ON i.id = c.issue_id \
              JOIN repos r ON r.id = c.repo_id \
-             WHERE c.id = ?1 AND r.owner = ?2 AND r.name = ?3 AND c.deleted_at IS NULL",
+             WHERE c.id = ?1 AND c.repo_id = ?2 AND c.deleted_at IS NULL",
             &[
                 DbValue::Integer(comment_id),
-                DbValue::Text(owner.to_string()),
-                DbValue::Text(repo_name.to_string()),
+                DbValue::Integer(repo_id),
             ],
         )
     .await

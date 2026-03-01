@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub async fn list_labels(ctx: &AppContext<'_>, owner: &str, repo_name: &str) -> Result<Vec<Label>> {
-    let repo = repo::ensure_repo(ctx, owner, repo_name, ctx.user).await?;
+    let repo = repo::get_repo(ctx, owner, repo_name).await?;
 
     #[derive(Debug, Deserialize)]
     struct Row {

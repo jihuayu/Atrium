@@ -76,6 +76,7 @@ enum Route {
     ApiCreateLabel,
     ApiDeleteLabel,
     ApiExportRepo,
+    ApiCreateRepo,
     ApiGetRepoSettings,
     ApiUpdateRepoSettings,
     ListIssues,
@@ -225,6 +226,10 @@ impl AppRouter {
         router
             .post
             .insert("/api/v1/auth/refresh", Route::ApiAuthRefresh)
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/repos", Route::ApiCreateRepo)
             .unwrap();
         router
             .post
@@ -418,6 +423,7 @@ impl AppRouter {
             Route::ApiCreateLabel => handlers::api::labels::create(req, ctx).await,
             Route::ApiDeleteLabel => handlers::api::labels::delete(req, ctx).await,
             Route::ApiExportRepo => handlers::api::export::get(req, ctx).await,
+            Route::ApiCreateRepo => handlers::api::admin::create(req, ctx).await,
             Route::ApiGetRepoSettings => handlers::api::admin::get(req, ctx).await,
             Route::ApiUpdateRepoSettings => handlers::api::admin::update(req, ctx).await,
             Route::ListIssues => handlers::issues::list(req, ctx).await,

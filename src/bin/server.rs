@@ -14,7 +14,7 @@ struct ServerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    run(load_config_from_env()).await
+    run(load_config_from_env()?).await
 }
 
 async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -37,8 +37,15 @@ async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn load_config_from_env() -> ServerConfig {
-    ServerConfig {
+fn load_config_from_env() -> Result<ServerConfig, io::Error> {
+    let jwt_secret_raw = env_with_fallback("ATRIUM_JWT_SECRET", "XTALK_JWT_SECRET")
+        .ok_or_else(|| io::Error::other("ATRIUM_JWT_SECRET or XTALK_JWT_SECRET is required"))?;
+    let jwt_secret = parse_secret_bytes(&jwt_secret_raw);
+    if jwt_secret.len() < 16 {
+        return Err(io::Error::other("JWT secret must be at least 16 bytes"));
+    }
+
+    Ok(ServerConfig {
         base_url: env_with_fallback("ATRIUM_BASE_URL", "XTALK_BASE_URL")
             .unwrap_or_else(|| "http://localhost:3000".to_string()),
         database_url: env_with_fallback("ATRIUM_DATABASE_URL", "XTALK_DATABASE_URL")
@@ -54,14 +61,12 @@ fn load_config_from_env() -> ServerConfig {
             .unwrap_or(60),
         listen: env_with_fallback("ATRIUM_LISTEN", "XTALK_LISTEN")
             .unwrap_or_else(|| "0.0.0.0:3000".to_string()),
-        jwt_secret: env_with_fallback("ATRIUM_JWT_SECRET", "XTALK_JWT_SECRET")
-            .map(|v| parse_secret_bytes(&v))
-            .unwrap_or_else(|| b"atrium-dev-secret-change-me".to_vec()),
+        jwt_secret,
         google_client_id: env_with_fallback("ATRIUM_GOOGLE_CLIENT_ID", "XTALK_GOOGLE_CLIENT_ID")
             .filter(|v| !v.trim().is_empty()),
         apple_app_id: env_with_fallback("ATRIUM_APPLE_APP_ID", "XTALK_APPLE_APP_ID")
             .filter(|v| !v.trim().is_empty()),
-    }
+    })
 }
 
 fn env_with_fallback(primary: &str, legacy: &str) -> Option<String> {
@@ -90,6 +95,10 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        env_lock().lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn clear_server_envs() {
         for key in [
             "ATRIUM_BASE_URL",
@@ -113,8 +122,18 @@ mod tests {
             "XTALK_APPLE_APP_ID",
             "XTALK_TEST_BYPASS_SECRET",
         ] {
-            std::env::remove_var(key);
+            remove_env_var(key);
         }
+    }
+
+    fn set_env_var(key: &str, value: &str) {
+        // SAFETY: tests serialize env mutation with `env_lock`.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove_env_var(key: &str) {
+        // SAFETY: tests serialize env mutation with `env_lock`.
+        unsafe { std::env::remove_var(key) };
     }
 
     fn temp_db_url() -> (tempfile::TempPath, String) {
@@ -133,60 +152,72 @@ mod tests {
     }
 
     #[test]
-    fn load_config_uses_defaults() {
-        let _guard = env_lock().lock().expect("lock env");
+    fn load_config_requires_jwt_secret() {
+        let _guard = lock_env();
         clear_server_envs();
 
-        let cfg = load_config_from_env();
+        let err = load_config_from_env().err().expect("missing secret must fail");
+        assert!(err
+            .to_string()
+            .contains("ATRIUM_JWT_SECRET or XTALK_JWT_SECRET is required"));
+    }
+
+    #[test]
+    fn load_config_uses_defaults_when_secret_present() {
+        let _guard = lock_env();
+        clear_server_envs();
+        set_env_var("ATRIUM_JWT_SECRET", "YXRyaXVtLWRlZmF1bHQtand0LXNlY3JldA");
+
+        let cfg = load_config_from_env().expect("load config");
         assert_eq!(cfg.base_url, "http://localhost:3000");
         assert_eq!(cfg.database_url, "sqlite:///data/atrium.db");
         assert_eq!(cfg.token_cache_ttl, 3600);
         assert_eq!(cfg.cache_max_issues, 256);
         assert_eq!(cfg.cache_ttl, 60);
         assert_eq!(cfg.listen, "0.0.0.0:3000");
-        assert_eq!(cfg.jwt_secret, b"atrium-dev-secret-change-me".to_vec());
+        assert_eq!(cfg.jwt_secret, b"atrium-default-jwt-secret".to_vec());
         assert_eq!(cfg.google_client_id, None);
         assert_eq!(cfg.apple_app_id, None);
     }
 
     #[test]
     fn load_config_prefers_atrium_and_falls_back_to_xtalk() {
-        let _guard = env_lock().lock().expect("lock env");
+        let _guard = lock_env();
         clear_server_envs();
 
-        std::env::set_var("XTALK_BASE_URL", "https://legacy.example");
-        std::env::set_var("XTALK_DATABASE_URL", "sqlite://legacy.db");
-        std::env::set_var("XTALK_TOKEN_CACHE_TTL", "10");
-        std::env::set_var("XTALK_CACHE_MAX_ISSUES", "11");
-        std::env::set_var("XTALK_CACHE_TTL", "12");
-        std::env::set_var("XTALK_LISTEN", "127.0.0.1:9999");
-        std::env::set_var("XTALK_JWT_SECRET", "bGVnYWN5");
-        std::env::set_var("XTALK_GOOGLE_CLIENT_ID", "legacy-google");
-        std::env::set_var("XTALK_APPLE_APP_ID", "legacy-apple");
+        set_env_var("XTALK_BASE_URL", "https://legacy.example");
+        set_env_var("XTALK_DATABASE_URL", "sqlite://legacy.db");
+        set_env_var("XTALK_TOKEN_CACHE_TTL", "10");
+        set_env_var("XTALK_CACHE_MAX_ISSUES", "11");
+        set_env_var("XTALK_CACHE_TTL", "12");
+        set_env_var("XTALK_LISTEN", "127.0.0.1:9999");
+        set_env_var("XTALK_JWT_SECRET", "bGVnYWN5LXRlc3Qtc2VjcmV0");
+        set_env_var("XTALK_GOOGLE_CLIENT_ID", "legacy-google");
+        set_env_var("XTALK_APPLE_APP_ID", "legacy-apple");
 
-        let fallback_cfg = load_config_from_env();
+        let fallback_cfg = load_config_from_env().expect("load legacy");
         assert_eq!(fallback_cfg.base_url, "https://legacy.example");
         assert_eq!(fallback_cfg.database_url, "sqlite://legacy.db");
         assert_eq!(fallback_cfg.token_cache_ttl, 10);
         assert_eq!(fallback_cfg.cache_max_issues, 11);
         assert_eq!(fallback_cfg.cache_ttl, 12);
         assert_eq!(fallback_cfg.listen, "127.0.0.1:9999");
-        assert_eq!(fallback_cfg.jwt_secret, b"legacy".to_vec());
+        assert_eq!(fallback_cfg.jwt_secret, b"legacy-test-secret".to_vec());
         assert_eq!(
             fallback_cfg.google_client_id.as_deref(),
             Some("legacy-google")
         );
         assert_eq!(fallback_cfg.apple_app_id.as_deref(), Some("legacy-apple"));
 
-        std::env::set_var("ATRIUM_BASE_URL", "https://atrium.example");
-        std::env::set_var("ATRIUM_TOKEN_CACHE_TTL", "20");
-        std::env::set_var("ATRIUM_JWT_SECRET", "YXRyaXVt");
-        std::env::set_var("ATRIUM_GOOGLE_CLIENT_ID", "atrium-google");
+        set_env_var("ATRIUM_BASE_URL", "https://atrium.example");
+        set_env_var("ATRIUM_TOKEN_CACHE_TTL", "20");
+        set_env_var("ATRIUM_JWT_SECRET", "YXRyaXVtLXRlc3Qtc2VjcmV0");
+        set_env_var("ATRIUM_GOOGLE_CLIENT_ID", "atrium-google");
 
-        let preferred_cfg = load_config_from_env();
+        let preferred_cfg = load_config_from_env().expect("load preferred");
         assert_eq!(preferred_cfg.base_url, "https://atrium.example");
         assert_eq!(preferred_cfg.token_cache_ttl, 20);
-        assert_eq!(preferred_cfg.jwt_secret, b"atrium".to_vec());
+        assert_eq!(preferred_cfg.jwt_secret, b"atrium-test-secret".to_vec());
         assert_eq!(
             preferred_cfg.google_client_id.as_deref(),
             Some("atrium-google")
@@ -233,12 +264,13 @@ mod tests {
 
     #[test]
     fn main_reads_env_and_propagates_bind_error() {
-        let _guard = env_lock().lock().expect("lock env");
+        let _guard = lock_env();
         clear_server_envs();
 
         let (_db_file, db_url) = temp_db_url();
-        std::env::set_var("ATRIUM_DATABASE_URL", db_url);
-        std::env::set_var("ATRIUM_LISTEN", "invalid-listen");
+        set_env_var("ATRIUM_DATABASE_URL", &db_url);
+        set_env_var("ATRIUM_LISTEN", "invalid-listen");
+        set_env_var("ATRIUM_JWT_SECRET", "YXRyaXVtLXRlc3Qtc2VjcmV0");
 
         let err = super::main().err().expect("main must fail");
         assert!(err.to_string().contains("invalid"));
