@@ -1,4 +1,4 @@
--- Combined schema for test initialization (0001 + 0002 merged)
+-- Combined schema for test initialization (0001 + 0002 + 0003 merged)
 -- This file represents the final table structure after all migrations.
 -- Used by scripts/test.py for fresh D1 test databases to avoid
 -- migration rename/drop operations that conflict with D1's FK enforcement.
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS repos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner TEXT NOT NULL,
     name TEXT NOT NULL,
+    owner_user_id INTEGER REFERENCES users(id),
     admin_user_id INTEGER,
     issue_counter INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -126,3 +127,4 @@ CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo_id, state, delet
 CREATE INDEX IF NOT EXISTS idx_issues_repo_number ON issues(repo_id, number);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
+CREATE INDEX IF NOT EXISTS idx_repos_owner_user_id ON repos(owner_user_id);
