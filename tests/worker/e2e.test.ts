@@ -176,6 +176,10 @@ describe("Atrium native Worker API", () => {
     expect(reply.status).toBe(201);
     const replyId = (await json(reply)).id;
 
+    const nestedReply = await owner.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "nested", parent_id: replyId });
+    expect(nestedReply.status).toBe(201);
+    const nestedReplyId = (await json(nestedReply)).id;
+
     const roots = await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
     expect(roots.status).toBe(200);
     const rootComments = await json(roots);
@@ -190,6 +194,10 @@ describe("Atrium native Worker API", () => {
     expect(replies.status).toBe(200);
     expect((await json(replies)).data.map((item: any) => item.id)).toEqual([replyId]);
 
+    const flatReplies = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}&thread=flat`);
+    expect(flatReplies.status).toBe(200);
+    expect((await json(flatReplies)).data.map((item: any) => item.id)).toEqual([replyId, nestedReplyId]);
+
     expect((await bob.patch(`/api/v1/websites/explicit-blog/comments/${commentId}`, { body: "bob edit" })).status).toBe(403);
     const edited = await alice.patch(`/api/v1/websites/explicit-blog/comments/${commentId}`, { body: "alice edit" });
     expect(edited.status).toBe(200);
@@ -202,6 +210,9 @@ describe("Atrium native Worker API", () => {
     expect((await json(duplicateReaction)).heart).toBe(1);
     expect((await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/invalid`)).status).toBe(422);
     expect((await bob.delete(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/heart`)).status).toBe(204);
+    const deletedReaction = await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/laugh`);
+    expect(deletedReaction.status).toBe(200);
+    expect((await json(deletedReaction)).laugh).toBe(1);
 
     const selfDelete = await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "self delete" });
     expect(selfDelete.status).toBe(201);
@@ -209,10 +220,48 @@ describe("Atrium native Worker API", () => {
     expect((await bob.delete(`/api/v1/websites/explicit-blog/comments/${selfDeleteId}`)).status).toBe(403);
     expect((await alice.delete(`/api/v1/websites/explicit-blog/comments/${selfDeleteId}`)).status).toBe(204);
 
+    expect((await owner.delete(`/api/v1/websites/explicit-blog/comments/${commentId}`)).status).toBe(204);
+    const deletedRoots = await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
+    expect(deletedRoots.status).toBe(200);
+    const deletedRoot = (await json(deletedRoots)).data.find((item: any) => item.id === commentId);
+    expect(deletedRoot).toMatchObject({
+      id: commentId,
+      body: "",
+      body_html: "",
+      deleted: true,
+      reactions: {
+        like: 0,
+        dislike: 0,
+        heart: 0,
+        laugh: 0,
+        hooray: 0,
+        confused: 0,
+        rocket: 0,
+        eyes: 0,
+        total: 0
+      }
+    });
+    expect((await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/eyes`)).status).toBe(404);
+    expect((await bob.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "blocked child", parent_id: commentId })).status).toBe(404);
+
+    const deletedFlatReplies = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}&thread=flat`);
+    expect(deletedFlatReplies.status).toBe(200);
+    expect((await json(deletedFlatReplies)).data.map((item: any) => item.id)).toEqual([replyId, nestedReplyId]);
+
     expect((await owner.delete(`/api/v1/websites/explicit-blog/comments/${replyId}`)).status).toBe(204);
+    const flatAfterReplyDelete = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}&thread=flat`);
+    expect(flatAfterReplyDelete.status).toBe(200);
+    const flatAfterReplyDeleteBody = await json(flatAfterReplyDelete);
+    expect(flatAfterReplyDeleteBody.data.map((item: any) => item.id)).toEqual([replyId, nestedReplyId]);
+    expect(flatAfterReplyDeleteBody.data.find((item: any) => item.id === replyId)).toMatchObject({
+      id: replyId,
+      body: "",
+      body_html: "",
+      deleted: true
+    });
     const moderation = await owner.get("/api/v1/websites/explicit-blog/admin/comments?status=deleted&page_key=post-1");
     expect(moderation.status).toBe(200);
-    expect((await json(moderation)).data.map((item: any) => item.id)).toEqual(expect.arrayContaining([replyId, selfDeleteId]));
+    expect((await json(moderation)).data.map((item: any) => item.id)).toEqual(expect.arrayContaining([commentId, replyId, selfDeleteId]));
 
     const ban = await owner.post("/api/v1/websites/explicit-blog/bans", { user_id: 3, reason: "spam" });
     expect(ban.status).toBe(201);
@@ -250,9 +299,17 @@ describe("Atrium native Worker API", () => {
     expect(quickReply.status).toBe(201);
     const quickReplyId = (await json(quickReply)).id;
 
+    const quickNestedReply = await owner.post("/api/v1/comments/current", { body: "quick nested", parent_id: quickReplyId }, { Referer: referer });
+    expect(quickNestedReply.status).toBe(201);
+    const quickNestedReplyId = (await json(quickNestedReply)).id;
+
     const replies = await anon.get(`/api/v1/comments/current/replies?comment_id=${quickCommentId}`, { Referer: referer });
     expect(replies.status).toBe(200);
     expect((await json(replies)).data.map((item: any) => item.id)).toEqual([quickReplyId]);
+
+    const flatReplies = await anon.get(`/api/v1/comments/current/replies?comment_id=${quickCommentId}&thread=flat`, { Referer: referer });
+    expect(flatReplies.status).toBe(200);
+    expect((await json(flatReplies)).data.map((item: any) => item.id)).toEqual([quickReplyId, quickNestedReplyId]);
 
     const reaction = await bob.put(`/api/v1/comments/current/${quickCommentId}/reactions/like`, undefined, { Referer: referer });
     expect(reaction.status).toBe(200);

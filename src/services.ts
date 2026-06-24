@@ -874,6 +874,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
   const limit = listLimit(query);
   const order = query.get("order")?.toLowerCase() === "desc" ? "DESC" : "ASC";
   const cursorId = query.get("cursor") ? decodeCursor(query.get("cursor")!) : null;
+  const flatThread = query.get("thread") === "flat";
   const filters = ["c.website_id = ?1", "c.page_id = ?2"];
   const params: any[] = [website.id, page.id];
   let idx = 3;
@@ -883,8 +884,32 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
     const parentId = Number(parent);
     if (!Number.isFinite(parentId)) throw ApiError.badRequest("invalid parent_id");
     await ensureCommentOnPage(ctx, website.id, page.id, parentId);
-    filters.push(`c.parent_comment_id = ?${idx++}`);
-    params.push(parentId);
+    if (flatThread) {
+      const flatFilters = ["c.website_id = ?1", "c.page_id = ?2"];
+      const flatParams: any[] = [website.id, page.id, parentId, website.id, page.id];
+      let flatIdx = 6;
+      if (cursorId != null) {
+        flatFilters.push(order === "DESC" ? `c.id < ?${flatIdx++}` : `c.id > ?${flatIdx++}`);
+        flatParams.push(cursorId);
+      }
+      const pointers = await ctx.db.all<{ id: number }>(
+        `WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM comments WHERE website_id = ?1 AND page_id = ?2 AND parent_comment_id = ?3
+          UNION ALL
+          SELECT c.id FROM comments c JOIN descendants d ON c.parent_comment_id = d.id WHERE c.website_id = ?4 AND c.page_id = ?5
+        )
+        SELECT c.id FROM comments c JOIN descendants d ON d.id = c.id WHERE ${flatFilters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${flatIdx}`,
+        [...flatParams, limit + 1]
+      );
+      const hasMore = pointers.length > limit;
+      if (hasMore) pointers.pop();
+      const data = [];
+      for (const pointer of pointers) data.push(commentResponse(await getCommentRow(ctx, website.id, pointer.id)));
+      return cursorPage(data, hasMore, pointers.at(-1)?.id ?? null);
+    } else {
+      filters.push(`c.parent_comment_id = ?${idx++}`);
+      params.push(parentId);
+    }
   }
   if (cursorId != null) {
     filters.push(order === "DESC" ? `c.id < ?${idx++}` : `c.id > ?${idx++}`);
@@ -936,6 +961,7 @@ async function ensureActiveCommentOnPage(ctx: AppContext, websiteId: number, pag
 
 function commentResponse(row: CommentRow) {
   const deleted = row.deleted_at != null;
+  const reactions = deleted ? emptyReactionCounts() : parseReactionCounts(row.reactions);
   return {
     id: row.id,
     website_key: row.website_key,
@@ -949,11 +975,25 @@ function commentResponse(row: CommentRow) {
       avatar_url: row.avatar_url,
       is_website_admin: row.author_is_website_admin === 1
     },
-    reactions: parseReactionCounts(row.reactions),
+    reactions,
     deleted,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
     deleted_at: toIso(row.deleted_at)
+  };
+}
+
+function emptyReactionCounts(): ReactionCounts {
+  return {
+    like: 0,
+    dislike: 0,
+    heart: 0,
+    laugh: 0,
+    hooray: 0,
+    confused: 0,
+    rocket: 0,
+    eyes: 0,
+    total: 0
   };
 }
 
