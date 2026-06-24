@@ -9,7 +9,7 @@ It exposes two API surfaces:
 
 ## Runtime
 
-Atrium is Worker-only. The runtime entrypoint is [`src/index.ts`](src/index.ts), and persistent data lives in the D1 binding configured by [`deploy/worker/wrangler.toml`](deploy/worker/wrangler.toml).
+Atrium is Worker-only. The runtime entrypoint is [`src/index.ts`](src/index.ts), and persistent data lives in the D1 binding configured by [`wrangler.jsonc`](wrangler.jsonc).
 
 Required binding:
 
@@ -49,13 +49,13 @@ pnpm test:worker
 Local:
 
 ```bash
-pnpm exec wrangler d1 migrations apply DB --config deploy/worker/wrangler.toml --local
+pnpm db:migrate:local
 ```
 
 Remote:
 
 ```bash
-pnpm exec wrangler d1 migrations apply DB --config deploy/worker/wrangler.toml --remote
+pnpm db:migrate:remote
 ```
 
 ## Deploy
@@ -65,6 +65,5 @@ pnpm deploy
 ```
 
 Production uses the `atrium-db` D1 binding and the custom Worker domain `https://atrium.jihuayu.com`.
-GitHub Actions deploys the Worker on every push to the `worker` branch, after typecheck,
-unit tests, and remote D1 migrations. The repository needs `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` GitHub Actions secrets for that workflow.
+Deployment follows the same local Wrangler flow as `jihuayu-account`: run remote D1
+migrations from a logged-in local Wrangler session, then run `pnpm deploy`.

@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "atrium",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-24",
+  "keep_vars": true,
+  "routes": [
+    {
+      "pattern": "atrium.jihuayu.com",
+      "custom_domain": true
+    }
+  ],
+  "placement": {
+    "mode": "smart"
+  },
+  "vars": {
+    "BASE_URL": "https://atrium.jihuayu.com",
+    "TOKEN_CACHE_TTL": "3600",
+    "ACCOUNT_BASE_URL": "https://account.jihuayu.com",
+    "ACCOUNT_AUDIENCE": "atrium"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "atrium-db",
+      "database_id": "fd908a31-1dc2-4e43-aca5-b55823aebeae",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": false,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  }
+}
