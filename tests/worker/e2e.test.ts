@@ -161,7 +161,16 @@ describe("Atrium native Worker API", () => {
 
     const comment = await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "hello" });
     expect(comment.status).toBe(201);
-    const commentId = (await json(comment)).id;
+    const commentBody = await json(comment);
+    const commentId = commentBody.id;
+    expect(commentBody.author).toMatchObject({ id: 3, is_website_admin: false });
+    expect(commentBody.author).not.toHaveProperty("email");
+
+    const adminComment = await owner.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "admin note" });
+    expect(adminComment.status).toBe(201);
+    const adminCommentBody = await json(adminComment);
+    expect(adminCommentBody.author).toMatchObject({ id: 2, is_website_admin: true });
+    expect(adminCommentBody.author).not.toHaveProperty("email");
 
     const reply = await bob.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "reply", parent_id: commentId });
     expect(reply.status).toBe(201);
@@ -169,7 +178,13 @@ describe("Atrium native Worker API", () => {
 
     const roots = await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
     expect(roots.status).toBe(200);
-    expect((await json(roots)).data.map((item: any) => item.id)).toContain(commentId);
+    const rootComments = await json(roots);
+    expect(rootComments.data.map((item: any) => item.id)).toContain(commentId);
+    expect(rootComments.data.find((item: any) => item.id === commentId).author).not.toHaveProperty("email");
+    expect(rootComments.data.find((item: any) => item.id === adminCommentBody.id).author).toMatchObject({
+      id: 2,
+      is_website_admin: true
+    });
 
     const replies = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}`);
     expect(replies.status).toBe(200);

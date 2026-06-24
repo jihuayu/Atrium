@@ -41,9 +41,8 @@ interface CommentRow {
   deleted_at: string | null;
   reactions: string;
   login: string;
-  email: string;
   avatar_url: string;
-  user_type: string;
+  author_is_website_admin: number;
 }
 
 interface RefererResolution {
@@ -904,7 +903,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
 
 async function getCommentRow(ctx: AppContext, websiteId: number, commentId: number): Promise<CommentRow> {
   const row = await ctx.db.first<CommentRow>(
-    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, u.login, u.email, u.avatar_url, u.type AS user_type FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
+    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, u.login, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
     [websiteId, commentId]
   );
   if (!row) throw ApiError.notFound("Comment");
@@ -937,14 +936,6 @@ async function ensureActiveCommentOnPage(ctx: AppContext, websiteId: number, pag
 
 function commentResponse(row: CommentRow) {
   const deleted = row.deleted_at != null;
-  const author = userFromRow({
-    id: row.user_id,
-    login: row.login,
-    email: row.email,
-    avatar_url: row.avatar_url,
-    type: row.user_type,
-    site_admin: 0
-  });
   return {
     id: row.id,
     website_key: row.website_key,
@@ -952,7 +943,12 @@ function commentResponse(row: CommentRow) {
     parent_id: row.parent_comment_id,
     body: deleted ? "" : row.body,
     body_html: deleted ? "" : renderMarkdown(row.body),
-    author: toPublicUser(author),
+    author: {
+      id: row.user_id,
+      login: row.login,
+      avatar_url: row.avatar_url,
+      is_website_admin: row.author_is_website_admin === 1
+    },
     reactions: parseReactionCounts(row.reactions),
     deleted,
     created_at: toIso(row.created_at),
