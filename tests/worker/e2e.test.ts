@@ -72,6 +72,8 @@ describe("Atrium native Worker API", () => {
     expect(rootText).toContain("站点接入");
     expect(rootText).toContain("/docs/discovery");
     expect(rootText).toContain("_atrium.<host> TXT");
+    expect(rootText).toContain("不需要声明 website_key");
+    expect(rootText).toContain("origin 可省略");
 
     const discoveryKey = await anon.get("/api/v1/discovery/public-key");
     expect(discoveryKey.status).toBe(200);
@@ -85,6 +87,8 @@ describe("Atrium native Worker API", () => {
     expect(guideHtml).toContain("/.well-known/atrium.json");
     expect(guideHtml).toContain("_atrium.blog.example.com TXT");
     expect(guideHtml).toContain("/api/v1/discovery/public-key");
+    expect(guideHtml).toContain("可选填写 origin");
+    expect(guideHtml).not.toContain('"website_key"');
 
     expect((await anon.get("/repos/e2e/repo/issues")).status).toBe(404);
     expect((await anon.post("/repos/e2e/repo/issues", { title: "old" })).status).toBe(404);
@@ -238,7 +242,7 @@ describe("Atrium native Worker API", () => {
 
   test("discovery rejects unsafe or conflicting metadata", async () => {
     await ensureUsers();
-    await createWebsite("existing-key", "https://registered-key.example.com");
+    await createWebsite("discover-conflict.example.com", "https://registered-key.example.com");
 
     const cases = [
       "https://discover-mismatch.example.com/post",

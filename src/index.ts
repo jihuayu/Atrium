@@ -43,8 +43,9 @@ app.get("/", (c) =>
 站点接入:
   1. 阅读完整接入说明: ${c.get("ctx").baseUrl.replace(/\/+$/, "")}/docs/discovery
   2. 在站点发布 https://<host>/.well-known/atrium.json，或添加 _atrium.<host> TXT
-  3. 明文或 enc:jwe: 加密字段都支持；加密公钥见 /api/v1/discovery/public-key
-  4. admin_emails 里的邮箱登录后会自动认领该 website admin 权限
+  3. 不需要声明 website_key；Atrium 会从当前页面 hostname 推导，origin 可省略
+  4. 明文或 enc:jwe: 加密字段都支持；加密公钥见 /api/v1/discovery/public-key
+  5. admin_emails 里的邮箱登录后会自动认领该 website admin 权限
 
 Native API:
   GET    /docs/discovery

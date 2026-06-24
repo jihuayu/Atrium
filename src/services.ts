@@ -694,7 +694,7 @@ async function discoverWebsiteForOrigin(ctx: AppContext, origin: string): Promis
     await recordDiscoveryFailure(ctx, origin, {
       status: "conflict",
       source: lookup.metadata.source,
-      error: "website_key already exists for another origin"
+      error: "derived website key already exists for another origin"
     });
     return null;
   }

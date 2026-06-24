@@ -74,12 +74,13 @@ Quick mode may auto-create/update the page for a matched website origin. If the 
 {
   "atrium": "v1",
   "origin": "https://blog.example.com",
-  "website_key": "blog.example.com",
   "name": "Blog",
   "admin_emails": ["owner@example.com"],
   "contact_email": "owner@example.com"
 }
 ```
+
+`origin` is optional; when present, it must match the current page origin from the `Referer` header. Atrium derives the website key from the current page hostname.
 
 Sensitive top-level fields may be replaced by `enc:jwe:<compact-jwe>`. The JWE uses `RSA-OAEP-256` and `A256GCM`, and the decrypted plaintext must be the original JSON value for that field. The current encryption key is exposed at:
 
@@ -88,10 +89,10 @@ Sensitive top-level fields may be replaced by `enc:jwe:<compact-jwe>`. The JWE u
 DNS TXT uses the same JSON payload with the `atrium-site=` prefix:
 
 ```text
-_atrium.blog.example.com TXT "atrium-site={\"atrium\":\"v1\",\"origin\":\"https://blog.example.com\",\"website_key\":\"blog.example.com\",\"name\":\"Blog\",\"admin_emails\":[\"owner@example.com\"]}"
+_atrium.blog.example.com TXT "atrium-site={\"atrium\":\"v1\",\"origin\":\"https://blog.example.com\",\"name\":\"Blog\",\"admin_emails\":[\"owner@example.com\"]}"
 ```
 
-Discovery-created websites bind only the current `Referer` origin. If `website_key` already exists but the origin is not bound, Atrium does not merge it automatically and returns `website_not_found`.
+Discovery-created websites bind only the current `Referer` origin. If the key derived from the page hostname already exists but the origin is not bound, Atrium does not merge it automatically and returns `website_not_found`.
 
 Website admins moderate comments and ban users within a website:
 

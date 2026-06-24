@@ -120,8 +120,6 @@ async function discoveryTestConfig() {
 
   const filePlain = {
     atrium: "v1",
-    origin: "https://discover-file.example.com",
-    website_key: "discover-file.example.com",
     name: "Discover File",
     admin_emails: ["owner@test.com"],
     contact_email: "owner@test.com"
@@ -129,22 +127,18 @@ async function discoveryTestConfig() {
   const fileEncrypted = {
     atrium: "v1",
     origin: "https://discover-file-encrypted.example.com",
-    website_key: "discover-file-encrypted.example.com",
     name: "Discover File Encrypted",
     admin_emails: await encrypt(["owner@test.com"]),
     contact_email: await encrypt("owner@test.com")
   };
   const dnsPlain = {
     atrium: "v1",
-    origin: "https://discover-dns.example.com",
-    website_key: "discover-dns.example.com",
     name: "Discover DNS",
     admin_emails: ["owner@test.com"]
   };
   const dnsEncrypted = {
     atrium: "v1",
     origin: "https://discover-dns-encrypted.example.com",
-    website_key: "discover-dns-encrypted.example.com",
     name: "Discover DNS Encrypted",
     admin_emails: await encrypt(["owner@test.com"])
   };
@@ -154,33 +148,28 @@ async function discoveryTestConfig() {
     privateJwk,
     publicJwk,
     wellKnown: {
-      [filePlain.origin]: filePlain,
+      "https://discover-file.example.com": filePlain,
       [fileEncrypted.origin]: fileEncrypted,
       "https://discover-mismatch.example.com": {
         atrium: "v1",
         origin: "https://other.example.com",
-        website_key: "discover-mismatch.example.com",
         name: "Mismatch",
         admin_emails: ["owner@test.com"]
       },
       "https://discover-bad-jwe.example.com": {
         atrium: "v1",
         origin: "https://discover-bad-jwe.example.com",
-        website_key: "discover-bad-jwe.example.com",
         name: "Bad JWE",
         admin_emails: "enc:jwe:not-a-jwe"
       },
       "https://discover-wrong-type.example.com": {
         atrium: "v1",
         origin: "https://discover-wrong-type.example.com",
-        website_key: "discover-wrong-type.example.com",
         name: "Wrong Type",
         admin_emails: await encrypt("owner@test.com")
       },
       "https://discover-conflict.example.com": {
         atrium: "v1",
-        origin: "https://discover-conflict.example.com",
-        website_key: "existing-key",
         name: "Conflict",
         admin_emails: ["owner@test.com"]
       }

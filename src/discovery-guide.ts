@@ -6,7 +6,6 @@ export function renderDiscoveryGuide(baseUrl: string): string {
     {
       atrium: "v1",
       origin: "https://blog.example.com",
-      website_key: "blog.example.com",
       name: "Blog",
       admin_emails: ["owner@example.com"],
       contact_email: "owner@example.com"
@@ -18,7 +17,6 @@ export function renderDiscoveryGuide(baseUrl: string): string {
     {
       atrium: "v1",
       origin: "https://blog.example.com",
-      website_key: "blog.example.com",
       name: "Blog",
       admin_emails: "enc:jwe:<compact-jwe>",
       contact_email: "enc:jwe:<compact-jwe>"
@@ -27,7 +25,7 @@ export function renderDiscoveryGuide(baseUrl: string): string {
     2
   );
   const txtRecord =
-    '_atrium.blog.example.com TXT "atrium-site={\\"atrium\\":\\"v1\\",\\"origin\\":\\"https://blog.example.com\\",\\"website_key\\":\\"blog.example.com\\",\\"name\\":\\"Blog\\",\\"admin_emails\\":[\\"owner@example.com\\"]}"';
+    '_atrium.blog.example.com TXT "atrium-site={\\"atrium\\":\\"v1\\",\\"origin\\":\\"https://blog.example.com\\",\\"name\\":\\"Blog\\",\\"admin_emails\\":[\\"owner@example.com\\"]}"';
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -237,7 +235,7 @@ export function renderDiscoveryGuide(baseUrl: string): string {
       <h2>最快接入</h2>
       <div class="grid">
         <div class="step"><strong>1. 放置元数据</strong><p>在站点根域发布 <code>/.well-known/atrium.json</code>，或添加等价的 DNS TXT 记录。</p></div>
-        <div class="step"><strong>2. 填对 origin</strong><p><code>origin</code> 必须和浏览器实际 <code>Referer</code> 的 origin 完全一致。</p></div>
+        <div class="step"><strong>2. 可选填写 origin</strong><p><code>origin</code> 可以省略；填写时必须和浏览器实际 <code>Referer</code> 的 origin 完全一致。</p></div>
         <div class="step"><strong>3. 登录认领</strong><p><code>admin_emails</code> 中的邮箱登录 Atrium 后，会自动获得该站点管理权限。</p></div>
       </div>
     </section>
@@ -262,9 +260,8 @@ export function renderDiscoveryGuide(baseUrl: string): string {
         <thead><tr><th>字段</th><th>要求</th></tr></thead>
         <tbody>
           <tr><td><code>atrium</code></td><td>固定为 <code>v1</code>。</td></tr>
-          <tr><td><code>origin</code></td><td>必须是 HTTPS origin，并且必须等于请求页面的 origin。</td></tr>
-          <tr><td><code>website_key</code></td><td>可选；默认使用 hostname。若 key 已存在但 origin 未绑定，Atrium 不会自动合并。</td></tr>
-          <tr><td><code>name</code></td><td>可选；默认使用 <code>website_key</code>。</td></tr>
+          <tr><td><code>origin</code></td><td>可选；填写时必须是 HTTPS origin，并且必须等于请求页面的 origin。省略时 Atrium 使用当前页面 origin。</td></tr>
+          <tr><td><code>name</code></td><td>可选；默认使用当前页面 hostname。</td></tr>
           <tr><td><code>admin_emails</code></td><td>必填；JSON array。发现成功后会作为待认领管理员邮箱保存。</td></tr>
           <tr><td><code>contact_email</code></td><td>可选；用于公开联系信息或后续管理流程。</td></tr>
         </tbody>
@@ -294,10 +291,10 @@ export function renderDiscoveryGuide(baseUrl: string): string {
       <table class="table">
         <thead><tr><th>现象</th><th>检查点</th></tr></thead>
         <tbody>
-          <tr><td><code>website_not_found</code></td><td>确认 <code>origin</code> 与页面 origin 完全一致，且 metadata 文件或 TXT 可被公网读取。</td></tr>
+          <tr><td><code>website_not_found</code></td><td>如果填写了 <code>origin</code>，确认它与页面 origin 完全一致；同时确认 metadata 文件或 TXT 可被公网读取。</td></tr>
           <tr><td>加密字段被拒绝</td><td>确认 JWE header 的 <code>alg</code>、<code>enc</code>、<code>kid</code> 正确，且解密后 JSON 类型与字段要求一致。</td></tr>
           <tr><td>管理员看不到站点</td><td>确认 Account 登录邮箱与 <code>admin_emails</code> 中的邮箱一致；邮箱会统一按小写匹配。</td></tr>
-          <tr><td>key 冲突</td><td>如果 <code>website_key</code> 已存在，需要站点管理员手动添加 origin，Atrium 不会自动合并。</td></tr>
+          <tr><td>key 冲突</td><td>如果从页面 hostname 推导出的 key 已存在，需要站点管理员手动添加 origin，Atrium 不会自动合并。</td></tr>
         </tbody>
       </table>
     </section>

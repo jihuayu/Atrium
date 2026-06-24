@@ -108,13 +108,13 @@ export async function parseDiscoveryDocument(
   if (!isRecord(raw)) throw new DiscoveryDocumentError("document must be a JSON object");
   const document = await decryptFlatDiscoveryFields(ctx, raw);
   if (document.atrium !== "v1") throw new DiscoveryDocumentError("atrium must be v1");
+  if (document.website_key != null) throw new DiscoveryDocumentError("website_key is not allowed");
 
-  const origin = requireString(document.origin, "origin");
-  const normalizedOrigin = normalizeDiscoveryOrigin(origin);
+  const normalizedOrigin =
+    document.origin == null ? normalizeDiscoveryOrigin(expectedOrigin) : normalizeDiscoveryOrigin(requireString(document.origin, "origin"));
   if (normalizedOrigin !== expectedOrigin) throw new DiscoveryDocumentError("origin does not match referer origin");
-
   const originUrl = new URL(expectedOrigin);
-  const websiteKey = document.website_key == null ? normalizeDiscoveryKey(originUrl.hostname) : normalizeDiscoveryKey(document.website_key);
+  const websiteKey = normalizeDiscoveryKey(originUrl.hostname);
   const name = document.name == null ? websiteKey : requireString(document.name, "name").trim();
   if (!name || name.length > 160) throw new DiscoveryDocumentError("name is invalid");
 
@@ -368,7 +368,7 @@ function normalizeDiscoveryOrigin(raw: string): string {
 
 function normalizeDiscoveryKey(value: unknown): string {
   const key = String(value ?? "").trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_.-]{1,127}$/.test(key)) throw new DiscoveryDocumentError("website_key is invalid");
+  if (!/^[a-z0-9][a-z0-9_.-]{1,127}$/.test(key)) throw new DiscoveryDocumentError("website key is invalid");
   return key;
 }
 

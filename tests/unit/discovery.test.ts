@@ -22,7 +22,6 @@ describe("discovery", () => {
       {
         atrium: "v1",
         origin: "https://blog.example.com",
-        website_key: "blog.example.com",
         name: "Blog",
         admin_emails: ["OWNER@example.com", "owner@example.com"],
         contact_email: "Contact@example.com"
@@ -39,6 +38,23 @@ describe("discovery", () => {
       contactEmail: "contact@example.com",
       source: "well-known"
     });
+  });
+
+  test("derives origin and website key from the referer origin when origin is omitted", async () => {
+    const metadata = await parseDiscoveryDocument(
+      ctx(),
+      {
+        atrium: "v1",
+        name: "Blog",
+        admin_emails: ["owner@example.com"]
+      },
+      "https://blog.example.com",
+      "dns-txt"
+    );
+
+    expect(metadata.origin).toBe("https://blog.example.com");
+    expect(metadata.websiteKey).toBe("blog.example.com");
+    expect(metadata.source).toBe("dns-txt");
   });
 
   test("detects and decrypts enc:jwe flat fields", async () => {
@@ -63,7 +79,6 @@ describe("discovery", () => {
         {
           atrium: "v1",
           origin: "https://blog.example.com",
-          website_key: "blog.example.com",
           name: "Blog",
           admin_emails: await fixture.encrypt("owner@example.com")
         },
@@ -80,7 +95,6 @@ describe("discovery", () => {
         {
           atrium: "v1",
           origin: "https://other.example.com",
-          website_key: "blog.example.com",
           name: "Blog",
           admin_emails: ["owner@example.com"]
         },
@@ -95,9 +109,24 @@ describe("discovery", () => {
         {
           atrium: "v1",
           origin: "https://blog.example.com",
-          website_key: "blog.example.com",
           name: "Blog",
           admin_emails: `${ENCRYPTED_FIELD_PREFIX}not-a-jwe`
+        },
+        "https://blog.example.com",
+        "well-known"
+      )
+    ).rejects.toThrow(DiscoveryDocumentError);
+  });
+
+  test("rejects declared website_key in discovery metadata", async () => {
+    await expect(
+      parseDiscoveryDocument(
+        ctx(),
+        {
+          atrium: "v1",
+          website_key: "blog.example.com",
+          name: "Blog",
+          admin_emails: ["owner@example.com"]
         },
         "https://blog.example.com",
         "well-known"
