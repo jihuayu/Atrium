@@ -1,75 +1,69 @@
 # Atrium
 
-Atrium 是一个轻量后端服务，用来代理 GitHub Issues 作为评论存储引擎，并暴露与 GitHub Issues 兼容的 API，方便 `utterances`、`gitalk` 一类前端评论组件无缝接入。
+Atrium is a Cloudflare Worker comment backend that stores GitHub Issues-compatible comment data in Cloudflare D1.
 
-## 背景
+It exposes two API surfaces:
 
-很多博客评论系统直接把评论写入 GitHub 仓库的 Issues。这样虽然方便，但很不优雅。
+- GitHub-compatible endpoints for clients that expect Issues, comments, labels, reactions, search, `/markdown`, `/user`, and `/user/export`.
+- Native `/api/v1` endpoints for first-party comment UI flows, Jihuayu Account login, JWT auth, cursor pagination, repo settings, labels, reactions, and exports.
 
-Atrium 的目标是：
+## Runtime
 
-- 保持 GitHub Issues API 兼容，尽量不改前端接入层
-- 把评论数据落到你自己的数据库
-- 支持独立后端部署和 Cloudflare Worker 部署
+Atrium is Worker-only. The runtime entrypoint is [`src/index.ts`](src/index.ts), and persistent data lives in the D1 binding configured by [`deploy/worker/wrangler.toml`](deploy/worker/wrangler.toml).
 
-## 功能特性
+Required binding:
 
-- GitHub Issues API 兼容接口（issues / comments / reactions / search）
-- Native API（JWT）用于更完整的站内能力
-- 多 Provider 认证（GitHub / Google / Apple）
-- 原生 GitHub OAuth 登录流程（`/api/v1/auth/github/authorize` + `/callback`）
-- HttpOnly + Secure + SameSite Cookie 存储 access/refresh token
-- Thread slug 查询（`?slug=` O(1) 查找，替代线性扫描）
-- 本地 SQLite 或 Cloudflare D1
-- 轻量、低运维成本
+- `DB`: Cloudflare D1 database
 
-## 部署方式
+Important environment variables:
 
-### 1. 独立服务（Server）
+- `BASE_URL`: public API origin used when formatting API URLs and cookie security
+- `TOKEN_CACHE_TTL`: GitHub/provider token cache TTL in seconds, default `3600`
+- `JWT_SECRET`: HS256 secret for native access and refresh tokens
+- `ACCOUNT_ISSUER`: OIDC issuer, default `https://account.jihuayu.com`
+- `ACCOUNT_CLIENT_ID`: OAuth client id registered in `jihuayu-account`
+- `ACCOUNT_CLIENT_SECRET`: optional OAuth client secret for confidential account clients
+- `ACCOUNT_REDIRECT_URI`: optional registered callback override; defaults to `${BASE_URL}/api/v1/auth/account/callback`
+- `ACCOUNT_SCOPE`: OIDC scopes, default `openid profile email`
+- `ATRIUM_TEST_BYPASS_SECRET`: local/CI-only HTTP test bypass secret
 
-```bash
-cargo run --features server --bin atrium-server
-```
+Native login uses `account.jihuayu.com` as the OIDC provider:
 
-常用环境变量（新旧前缀兼容）：
+- `GET /api/v1/auth/account/authorize?redirect_uri=...&state=...`
+- `GET /api/v1/auth/account/callback`
+- `POST /api/v1/auth/account` with `{ "id_token": "..." }`
 
-- `ATRIUM_BASE_URL`（兼容 `XTALK_BASE_URL`）
-- `ATRIUM_DATABASE_URL`（兼容 `XTALK_DATABASE_URL`）
-- `ATRIUM_JWT_SECRET`（兼容 `XTALK_JWT_SECRET`）
-- `ATRIUM_LISTEN`（兼容 `XTALK_LISTEN`）
-- `ATRIUM_CORS_ORIGIN`（兼容 `XTALK_CORS_ORIGIN`）— 前端域名，启用后 CORS 允许携带凭证（cookie）
-- `ATRIUM_GITHUB_CLIENT_ID`（兼容 `XTALK_GITHUB_CLIENT_ID`）— GitHub OAuth App client id，启用原生 OAuth 登录
-- `ATRIUM_GITHUB_CLIENT_SECRET`（兼容 `XTALK_GITHUB_CLIENT_SECRET`）— GitHub OAuth App client secret
-- `ATRIUM_GOOGLE_CLIENT_ID`（兼容 `XTALK_GOOGLE_CLIENT_ID`）
-- `ATRIUM_APPLE_APP_ID`（兼容 `XTALK_APPLE_APP_ID`）
+The legacy `GET /api/v1/auth/github/authorize` and callback routes remain as compatibility aliases for the account login bridge. `POST /api/v1/auth/github` still accepts a GitHub token for clients that need direct GitHub-compatible token exchange.
 
-### 2. Cloudflare Worker
+## Development
 
 ```bash
-cargo install worker-build
-worker-build --profile release-wasm --features worker
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm test:worker
 ```
 
-Worker 配置见 `deploy/worker/wrangler.toml`。
+`pnpm test:worker` starts `wrangler dev`, initializes a local D1 database from `deploy/worker/test_init.sql`, and runs HTTP black-box tests against the Worker.
 
-## 与前端评论库接入
+## D1 Migrations
 
-以 `utterances` 为例，将其 API 基地址指向 Atrium 服务地址即可。Atrium 会保持 GitHub 风格接口，减少前端改造成本。
-
-## 测试与覆盖率
-
-运行测试：
+Local:
 
 ```bash
-cargo test --features "server,test-utils" --no-fail-fast
+pnpm exec wrangler d1 migrations apply DB --config deploy/worker/wrangler.toml --local
 ```
 
-统计覆盖率（建议关注库代码）：
+Remote:
 
 ```bash
-cargo llvm-cov --features "server,test-utils" --lib --summary-only
+pnpm exec wrangler d1 migrations apply DB --config deploy/worker/wrangler.toml --remote
 ```
 
-## 许可证
+## Deploy
 
-本项目使用 `Apache-2.0`，许可证全文见 `LICENSE`。
+```bash
+pnpm deploy
+```
+
+The Worker config keeps the existing production routes and D1 database binding.

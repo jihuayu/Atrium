@@ -1,6 +1,6 @@
--- Combined schema for test initialization (0001 + 0002 + 0003 merged)
+-- Combined schema for test initialization (0001 + 0002 + 0003 + 0004 + 0005 merged)
 -- This file represents the final table structure after all migrations.
--- Used by scripts/test.py for fresh D1 test databases to avoid
+-- Used by scripts/test-worker.ts for fresh D1 test databases to avoid
 -- migration rename/drop operations that conflict with D1's FK enforcement.
 
 CREATE TABLE IF NOT EXISTS users (
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS user_identities (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider         TEXT NOT NULL CHECK(provider IN ('github','google','apple')),
+    provider         TEXT NOT NULL CHECK(provider IN ('github','google','apple','account')),
     provider_user_id TEXT NOT NULL,
     email            TEXT NOT NULL DEFAULT '',
     avatar_url       TEXT NOT NULL DEFAULT '',
@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_user_identities_email ON user_identities(email);
 CREATE TABLE IF NOT EXISTS token_cache (
     token_hash TEXT NOT NULL,
     provider   TEXT NOT NULL DEFAULT 'github'
-               CHECK(provider IN ('github','google','apple','xtalk')),
+               CHECK(provider IN ('github','google','apple','xtalk','account')),
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     cached_at  TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at TEXT NOT NULL,
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS issues (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     closed_at TEXT,
     deleted_at TEXT,
+    slug TEXT,
     UNIQUE(repo_id, number)
 );
 
@@ -125,6 +126,9 @@ CREATE TABLE IF NOT EXISTS reactions (
 
 CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo_id, state, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_issues_repo_number ON issues(repo_id, number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_repo_slug
+    ON issues(repo_id, slug)
+    WHERE slug IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
 CREATE INDEX IF NOT EXISTS idx_repos_owner_user_id ON repos(owner_user_id);

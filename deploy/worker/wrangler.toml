@@ -1,5 +1,5 @@
 name = "atrium"
-main = "../../build/worker/shim.mjs"
+main = "../../src/index.ts"
 compatibility_date = "2024-09-23"
 
 [[routes]]
@@ -13,15 +13,13 @@ zone_name = "raw2.cc"
 [placement]
 mode = "smart"
 
-[build]
-command = "cargo install -q worker-build && worker-build --profile release-wasm --features worker"
-cwd = "../.."
-
 [vars]
 BASE_URL = "https://atrium.raw2.cc"
 TOKEN_CACHE_TTL = "3600"
-GOOGLE_CLIENT_ID = ""
-APPLE_APP_ID = ""
+ACCOUNT_ISSUER = "https://account.jihuayu.com"
+ACCOUNT_CLIENT_ID = ""
+ACCOUNT_REDIRECT_URI = ""
+ACCOUNT_SCOPE = "openid profile email"
 
 # test bypass is only for local/CI e2e, do not set in production
 # ATRIUM_TEST_BYPASS_SECRET = ""
