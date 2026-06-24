@@ -3,11 +3,10 @@ export interface Env {
   BASE_URL?: string;
   TOKEN_CACHE_TTL?: string;
   JWT_SECRET?: string;
+  ACCOUNT_BASE_URL?: string;
+  ACCOUNT_AUDIENCE?: string;
+  ACCOUNT_INTERNAL_SECRET?: string;
   ACCOUNT_ISSUER?: string;
-  ACCOUNT_CLIENT_ID?: string;
-  ACCOUNT_CLIENT_SECRET?: string;
-  ACCOUNT_REDIRECT_URI?: string;
-  ACCOUNT_SCOPE?: string;
   ATRIUM_TEST_BYPASS_SECRET?: string;
   XTALK_TEST_BYPASS_SECRET?: string;
 }

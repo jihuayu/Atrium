@@ -1,5 +1,5 @@
 import { ApiError } from "./error";
-import { accountClientId, accountIssuer, accountJwksUrl } from "./account-auth";
+import { introspectAccountCookie } from "./account-auth";
 import type {
   AppContext,
   CommentResponse,
@@ -24,8 +24,7 @@ import {
   timestampSeconds,
   toApiUser,
   toIso,
-  verifyAtriumJwt,
-  verifyProviderJwt
+  verifyAtriumJwt
 } from "./utils";
 
 export const GLOBAL_OWNER = "_global";
@@ -211,59 +210,19 @@ export async function refreshAtriumTokens(ctx: AppContext, refreshToken: string)
   return issueAtriumTokens(ctx, userFromRow(row));
 }
 
-export async function resolveProviderLogin(ctx: AppContext, provider: "google" | "apple", token: string, audience: string) {
-  const payload = await verifyProviderJwt(
-    token,
-    provider === "google" ? "https://www.googleapis.com/oauth2/v3/certs" : "https://appleid.apple.com/auth/keys",
-    provider === "google" ? "https://accounts.google.com" : "https://appleid.apple.com",
-    audience
-  );
-  const sub = String(payload.sub ?? "");
-  if (!sub) throw ApiError.unauthorized();
-  const email = typeof payload.email === "string" ? payload.email : "";
-  const picture = typeof payload.picture === "string" ? payload.picture : "";
-  const user = await resolveOrCreateProviderUser(ctx, {
-    provider,
-    provider_user_id: sub,
-    login: email || `${provider}-${sub}`,
-    email,
-    avatar_url: picture,
-    type: "User",
-    site_admin: false
-  });
-  await cacheProviderToken(ctx, provider, token, user.id, ctx.tokenCacheTtl);
-  return issueAtriumTokens(ctx, user);
-}
-
-export async function resolveAccountLogin(ctx: AppContext, idToken: string, expectedNonce?: string) {
-  const payload = await verifyProviderJwt(idToken, accountJwksUrl(ctx.env), accountIssuer(ctx.env), accountClientId(ctx.env));
-  const sub = String(payload.sub ?? "");
-  if (!sub) throw ApiError.unauthorized();
-  if (expectedNonce !== undefined && String(payload.nonce ?? "") !== expectedNonce) {
-    throw ApiError.unauthorized();
-  }
-  const email = typeof payload.email === "string" ? payload.email : "";
-  const picture = typeof payload.picture === "string" ? payload.picture : "";
-  const preferredUsername = typeof payload.preferred_username === "string" ? payload.preferred_username : "";
-  const name = typeof payload.name === "string" ? payload.name : "";
+export async function resolveAccountCookieUser(ctx: AppContext, cookieHeader: string | null | undefined): Promise<GitHubUser | null> {
+  const accountUser = await introspectAccountCookie(ctx, cookieHeader);
+  if (!accountUser) return null;
   const user = await resolveOrCreateProviderUser(ctx, {
     provider: "account",
-    provider_user_id: sub,
-    login: preferredUsername || email || name || `account-${sub}`,
-    email,
-    avatar_url: picture,
+    provider_user_id: accountUser.sub,
+    login: accountUser.handle || accountUser.email || accountUser.displayName || `account-${accountUser.sub}`,
+    email: accountUser.email ?? "",
+    avatar_url: accountUser.avatarUrl ?? "",
     type: "User",
     site_admin: false
   });
-  await cacheProviderToken(ctx, "account", idToken, user.id, ctx.tokenCacheTtl);
-  return issueAtriumTokens(ctx, user);
-}
-
-async function cacheProviderToken(ctx: AppContext, provider: string, token: string, userId: number, ttl: number) {
-  await ctx.db.execute(
-    "INSERT INTO token_cache (token_hash, provider, user_id, cached_at, expires_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now', '+' || ?4 || ' seconds')) ON CONFLICT(token_hash, provider) DO UPDATE SET user_id = excluded.user_id, cached_at = datetime('now'), expires_at = excluded.expires_at",
-    [await sha256Hex(token), provider, userId, ttl]
-  );
+  return user;
 }
 
 async function resolveOrCreateProviderUser(

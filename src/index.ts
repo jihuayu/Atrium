@@ -1,13 +1,6 @@
 import { Hono } from "hono";
 import type { Context, Next } from "hono";
-import {
-  accountCallbackUri,
-  buildAccountAuthorizeLocation,
-  exchangeAccountAuthorizationCode,
-  redirectWithUserState,
-  verifyAccountOAuthState,
-  type AccountAuthRoute
-} from "./account-auth";
+import { accountLoginLocation, redirectWithUserState } from "./account-auth";
 import { Database } from "./db";
 import { ApiError, asApiError } from "./error";
 import * as svc from "./services";
@@ -65,7 +58,7 @@ GitHub-Compatible API (token auth):
   DELETE /repos/{owner}/{repo}/issues/comments/{id}/reactions/{id}
   GET    /search/issues?q=...
 
-Native API (JWT auth):
+Native API (SSO cookie or JWT auth):
   POST   /api/v1/auth/account
   GET    /api/v1/auth/account/authorize
   GET    /api/v1/auth/account/callback
@@ -168,15 +161,14 @@ app.get("/search/issues", (c) =>
 
 app.post("/api/v1/auth/account", (c) =>
   native(c, async (ctx) => {
-    const input = await bodyJson(c);
-    const idToken = String(input.id_token ?? input.token ?? "");
-    if (!idToken) throw ApiError.badRequest("missing id_token");
-    const tokens = await svc.resolveAccountLogin(ctx, idToken);
+    if (!ctx.user) throw ApiError.unauthorized();
+    ensureJwtSecret(ctx);
+    const tokens = await svc.issueAtriumTokens(ctx, ctx.user);
     return withAuthCookies(ctx, json(tokens), tokens);
   })
 );
 app.get("/api/v1/auth/account/authorize", (c) => native(c, async (ctx) => accountAuthorize(c, ctx, "account")));
-app.get("/api/v1/auth/account/callback", (c) => native(c, async (ctx) => accountCallback(c, ctx, "account")));
+app.get("/api/v1/auth/account/callback", (c) => native(c, async (ctx) => accountCallback(c, ctx)));
 app.post("/api/v1/auth/github", (c) =>
   native(c, async (ctx) => {
     const input = await bodyJson(c);
@@ -186,11 +178,12 @@ app.post("/api/v1/auth/github", (c) =>
   })
 );
 app.get("/api/v1/auth/github/authorize", (c) => native(c, async (ctx) => accountAuthorize(c, ctx, "github")));
-app.get("/api/v1/auth/github/callback", (c) => native(c, async (ctx) => accountCallback(c, ctx, "github")));
+app.get("/api/v1/auth/github/callback", (c) => native(c, async (ctx) => accountCallback(c, ctx)));
 app.post("/api/v1/auth/google", () => legacyProviderDisabled("Google"));
 app.post("/api/v1/auth/apple", () => legacyProviderDisabled("Apple"));
 app.post("/api/v1/auth/refresh", (c) =>
   native(c, async (ctx) => {
+    ensureJwtSecret(ctx);
     let token: string | null = null;
     const bodyText = await c.req.text();
     if (bodyText) {
@@ -209,11 +202,7 @@ app.post("/api/v1/auth/refresh", (c) =>
 );
 app.delete("/api/v1/auth/session", (c) =>
   native(c, async (ctx) => {
-    if (!ctx.user) {
-      const token = parseToken(c.req.header("Authorization")) ?? cookieValue(c.req.header("Cookie"), ACCESS_COOKIE);
-      if (!token) throw ApiError.unauthorized();
-      ctx.user = await svc.resolveAtriumJwtUser(ctx, token);
-    }
+    if (!ctx.user) throw ApiError.unauthorized();
     const response = empty();
     const secure = secureFromBaseUrl(ctx.baseUrl);
     response.headers.append("Set-Cookie", clearCookie(ACCESS_COOKIE, secure));
@@ -223,11 +212,7 @@ app.delete("/api/v1/auth/session", (c) =>
 );
 app.get("/api/v1/auth/me", (c) =>
   native(c, async (ctx) => {
-    if (!ctx.user) {
-      const token = parseToken(c.req.header("Authorization")) ?? cookieValue(c.req.header("Cookie"), ACCESS_COOKIE);
-      if (!token) throw ApiError.unauthorized();
-      ctx.user = await svc.resolveAtriumJwtUser(ctx, token);
-    }
+    if (!ctx.user) throw ApiError.unauthorized();
     return json(userBody(ctx.user));
   })
 );
@@ -350,19 +335,16 @@ async function buildContext(c: Context<{ Bindings: Env; Variables: Vars }>): Pro
     return ctx;
   }
   const path = new URL(c.req.url).pathname;
-  if (path.startsWith("/api/v1/") && ctx.jwtSecret.length < 16) {
-    if (!path.startsWith("/api/v1/auth/google") && !path.startsWith("/api/v1/auth/apple")) {
-      throw ApiError.internal("JWT_SECRET is not configured");
-    }
+  if (path.startsWith("/api/v1/auth/refresh") || path.endsWith("/authorize") || path.startsWith("/api/v1/auth/google") || path.startsWith("/api/v1/auth/apple")) {
+    return ctx;
   }
-  if (path.startsWith("/api/v1/auth/")) return ctx;
   if (path.startsWith("/api/v1/")) {
-    const token = parseToken(authHeader) ?? cookieValue(c.req.header("Cookie"), ACCESS_COOKIE);
-    if (token) ctx.user = await svc.resolveAtriumJwtUser(ctx, token);
+    ctx.user = (await resolveNativeRequestUser(ctx, authHeader, c.req.header("Cookie"))) ?? undefined;
     return ctx;
   }
   const token = parseToken(authHeader);
   if (token) ctx.user = await svc.resolveGitHubUser(ctx, token);
+  else ctx.user = (await svc.resolveAccountCookieUser(ctx, c.req.header("Cookie"))) ?? undefined;
   return ctx;
 }
 
@@ -448,28 +430,46 @@ function withAuthCookies(ctx: AppContext, response: Response, tokens: { access_t
   return out;
 }
 
-async function accountAuthorize(c: Context<{ Bindings: Env; Variables: Vars }>, ctx: AppContext, route: AccountAuthRoute): Promise<Response> {
+async function accountAuthorize(c: Context<{ Bindings: Env; Variables: Vars }>, ctx: AppContext, route: "account" | "github"): Promise<Response> {
   const redirectUri = query(c).get("redirect_uri");
   if (!redirectUri) throw ApiError.badRequest("missing redirect_uri query parameter");
-  const location = await buildAccountAuthorizeLocation(ctx, route, redirectUri, query(c).get("state") ?? "");
+  const callback = new URL(`${ctx.baseUrl}/api/v1/auth/${route}/callback`);
+  callback.searchParams.set("redirect_uri", redirectUri);
+  const userState = query(c).get("state");
+  if (userState) callback.searchParams.set("state", userState);
+  const location = accountLoginLocation(ctx.env, callback.toString());
   return new Response(null, { status: 302, headers: { Location: location } });
 }
 
-async function accountCallback(c: Context<{ Bindings: Env; Variables: Vars }>, ctx: AppContext, route: AccountAuthRoute): Promise<Response> {
-  const error = query(c).get("error");
-  if (error) throw ApiError.badRequest(query(c).get("error_description") ?? error);
-  const code = query(c).get("code");
-  const stateToken = query(c).get("state");
-  if (!code) throw ApiError.badRequest("missing code query parameter");
-  if (!stateToken) throw ApiError.badRequest("missing state query parameter");
-  const state = await verifyAccountOAuthState(ctx, stateToken);
-  const idToken = await exchangeAccountAuthorizationCode(ctx, code, accountCallbackUri(ctx, route));
-  const tokens = await svc.resolveAccountLogin(ctx, idToken, state.nonce);
-  return withAuthCookies(ctx, new Response(null, { status: 302, headers: { Location: redirectWithUserState(state.redirectUri, state.userState) } }), tokens);
+async function accountCallback(c: Context<{ Bindings: Env; Variables: Vars }>, ctx: AppContext): Promise<Response> {
+  if (!ctx.user) throw ApiError.unauthorized();
+  const redirectUri = query(c).get("redirect_uri") || ctx.baseUrl;
+  let response = new Response(null, { status: 302, headers: { Location: redirectWithUserState(redirectUri, query(c).get("state") ?? "") } });
+  if (hasUsableJwtSecret(ctx)) {
+    response = withAuthCookies(ctx, response, await svc.issueAtriumTokens(ctx, ctx.user));
+  }
+  return response;
 }
 
 function legacyProviderDisabled(provider: string): Response {
   return json({ error: "not_configured", message: `${provider} login has moved to Jihuayu Account` }, 501);
+}
+
+async function resolveNativeRequestUser(ctx: AppContext, authHeader: string | undefined, cookieHeader: string | null | undefined): Promise<GitHubUser | null> {
+  const token = parseToken(authHeader) ?? cookieValue(cookieHeader, ACCESS_COOKIE);
+  if (token) {
+    ensureJwtSecret(ctx);
+    return await svc.resolveAtriumJwtUser(ctx, token);
+  }
+  return await svc.resolveAccountCookieUser(ctx, cookieHeader);
+}
+
+function hasUsableJwtSecret(ctx: AppContext): boolean {
+  return ctx.jwtSecret.length >= 16;
+}
+
+function ensureJwtSecret(ctx: AppContext): void {
+  if (!hasUsableJwtSecret(ctx)) throw ApiError.internal("JWT_SECRET is not configured");
 }
 
 async function proxyUtterancesToken(c: Context<{ Bindings: Env; Variables: Vars }>) {

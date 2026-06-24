@@ -16,13 +16,12 @@ mode = "smart"
 [vars]
 BASE_URL = "https://atrium.raw2.cc"
 TOKEN_CACHE_TTL = "3600"
-ACCOUNT_ISSUER = "https://account.jihuayu.com"
-ACCOUNT_CLIENT_ID = ""
-ACCOUNT_REDIRECT_URI = ""
-ACCOUNT_SCOPE = "openid profile email"
+ACCOUNT_BASE_URL = "https://account.jihuayu.com"
+ACCOUNT_AUDIENCE = "atrium"
 
 # test bypass is only for local/CI e2e, do not set in production
 # ATRIUM_TEST_BYPASS_SECRET = ""
+# set ACCOUNT_INTERNAL_SECRET as a Worker secret when account service enables INTERNAL_API_SECRET
 
 [[d1_databases]]
 binding = "DB"

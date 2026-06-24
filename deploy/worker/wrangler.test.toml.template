@@ -6,10 +6,8 @@ compatibility_date = "2024-09-23"
 [vars]
 BASE_URL = "http://localhost:__TEST_PORT__"
 TOKEN_CACHE_TTL = "3600"
-ACCOUNT_ISSUER = "https://account.jihuayu.com"
-ACCOUNT_CLIENT_ID = ""
-ACCOUNT_REDIRECT_URI = ""
-ACCOUNT_SCOPE = "openid profile email"
+ACCOUNT_BASE_URL = "https://account.jihuayu.com"
+ACCOUNT_AUDIENCE = "atrium"
 ATRIUM_TEST_BYPASS_SECRET = "__TEST_BYPASS_SECRET__"
 JWT_SECRET = "__TEST_JWT_SECRET__"
 

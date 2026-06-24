@@ -176,8 +176,16 @@ describe("Atrium Worker API", () => {
 
     expect((await anon.get("/api/v1/auth/me")).status).toBe(401);
     expect((await admin.get("/api/v1/auth/me")).status).toBe(200);
-    expect((await anon.get("/api/v1/auth/account/authorize?redirect_uri=https://app.jihuayu.com/done")).status).toBe(501);
-    expect((await anon.post("/api/v1/auth/account", { id_token: "fake" })).status).toBe(501);
+    const accountStart = await fetch(`${baseUrl}/api/v1/auth/account/authorize?redirect_uri=https://app.jihuayu.com/done&state=s1`, { redirect: "manual" });
+    expect(accountStart.status).toBe(302);
+    const accountLocation = accountStart.headers.get("location") ?? "";
+    expect(accountLocation).toContain("https://account.jihuayu.com/login");
+    const accountReturnTo = new URL(accountLocation).searchParams.get("return_to") ?? "";
+    const callbackUrl = new URL(accountReturnTo);
+    expect(callbackUrl.pathname).toBe("/api/v1/auth/account/callback");
+    expect(callbackUrl.searchParams.get("redirect_uri")).toBe("https://app.jihuayu.com/done");
+    expect(callbackUrl.searchParams.get("state")).toBe("s1");
+    expect((await anon.post("/api/v1/auth/account")).status).toBe(401);
     expect((await anon.post("/api/v1/auth/google", { token: "fake" })).status).toBe(501);
     expect((await anon.post("/api/v1/auth/refresh")).status).toBe(401);
 
