@@ -24,16 +24,16 @@ const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 app.use("*", async (c, next) => {
   if (c.req.method === "OPTIONS") {
-    return addCors(new Response(null, { status: 204, headers: { Allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS" } }));
+    return addCors(c, new Response(null, { status: 204, headers: { Allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS" } }));
   }
   try {
     c.set("ctx", await buildContext(c));
   } catch (error) {
     const apiError = asApiError(error);
-    return addCors(json(apiError.nativeBody(), apiError.status));
+    return addCors(c, json(apiError.nativeBody(), apiError.status));
   }
   await next();
-  c.res = addCors(c.res);
+  c.res = addCors(c, c.res);
 });
 
 app.get("/", (c) =>
@@ -358,12 +358,30 @@ function tryTestBypass(authHeader: string | undefined, secret: string | undefine
   };
 }
 
-function addCors(response: Response): Response {
+function addCors(c: Context, response: Response): Response {
   const out = new Response(response.body, response);
-  out.headers.set("Access-Control-Allow-Origin", "*");
+  const origin = c.req.header("Origin");
+  if (origin) {
+    out.headers.set("Access-Control-Allow-Origin", origin);
+    out.headers.set("Access-Control-Allow-Credentials", "true");
+    appendVary(out.headers, "Origin");
+  } else {
+    out.headers.set("Access-Control-Allow-Origin", "*");
+  }
   out.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   out.headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+  out.headers.set("Access-Control-Max-Age", "600");
   return out;
+}
+
+function appendVary(headers: Headers, value: string): void {
+  const current = headers.get("Vary");
+  if (!current) {
+    headers.set("Vary", value);
+    return;
+  }
+  const values = current.split(",").map((item) => item.trim().toLowerCase());
+  if (!values.includes(value.toLowerCase())) headers.set("Vary", `${current}, ${value}`);
 }
 
 export default app;

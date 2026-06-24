@@ -90,6 +90,23 @@ describe("Atrium native Worker API", () => {
     expect(guideHtml).toContain("可选填写 origin");
     expect(guideHtml).not.toContain('"website_key"');
 
+    const corsOrigin = "https://comments.example.com";
+    const corsResponse = await anon.get("/api/v1/auth/me", { Origin: corsOrigin });
+    expect(corsResponse.headers.get("Access-Control-Allow-Origin")).toBe(corsOrigin);
+    expect(corsResponse.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(corsResponse.headers.get("Vary")).toContain("Origin");
+
+    const preflight = await fetch(`${baseUrl}/api/v1/auth/me`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: corsOrigin,
+        "Access-Control-Request-Method": "GET"
+      }
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(corsOrigin);
+    expect(preflight.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+
     expect((await anon.get("/repos/e2e/repo/issues")).status).toBe(404);
     expect((await anon.post("/repos/e2e/repo/issues", { title: "old" })).status).toBe(404);
     expect((await anon.get("/api/v1/repos/e2e/repo/threads")).status).toBe(404);
