@@ -155,7 +155,25 @@ async function resolveOrCreateProviderUser(
     [providerUser.provider, providerUser.provider_user_id]
   );
   if (identity) {
-    const user = userFromRow(identity, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
+    const login = await allocateLoginForUser(ctx, providerUser.login, identity.id);
+    await ctx.db.execute(
+      "UPDATE users SET login = ?1, email = ?2, avatar_url = ?3, type = ?4, cached_at = datetime('now') WHERE id = ?5",
+      [login, providerUser.email, providerUser.avatar_url, providerUser.type, identity.id]
+    );
+    await ctx.db.execute(
+      "UPDATE user_identities SET email = ?1, avatar_url = ?2, cached_at = datetime('now') WHERE provider = ?3 AND provider_user_id = ?4",
+      [providerUser.email, providerUser.avatar_url, providerUser.provider, providerUser.provider_user_id]
+    );
+    const user = userFromRow(
+      {
+        ...identity,
+        login,
+        email: providerUser.email,
+        avatar_url: providerUser.avatar_url,
+        type: providerUser.type
+      },
+      providerUser.provider === "account" ? providerUser.provider_user_id : undefined
+    );
     await claimPendingWebsiteAdmins(ctx, user);
     return user;
   }
@@ -187,11 +205,15 @@ async function resolveOrCreateProviderUser(
 }
 
 async function allocateLogin(ctx: AppContext, preferred: string): Promise<string> {
+  return allocateLoginForUser(ctx, preferred, null);
+}
+
+async function allocateLoginForUser(ctx: AppContext, preferred: string, currentUserId: number | null): Promise<string> {
   const base = slugify(preferred) || "user";
   for (let i = 0; i < 1000; i += 1) {
     const candidate = i === 0 ? base : `${base}-${i}`;
     const exists = await ctx.db.first<{ id: number }>("SELECT id FROM users WHERE login = ?1", [candidate]);
-    if (!exists) return candidate;
+    if (!exists || exists.id === currentUserId) return candidate;
   }
   throw ApiError.internal("unable to allocate login");
 }
@@ -231,13 +253,17 @@ export async function requireSuperAdmin(ctx: AppContext): Promise<AuthUser> {
 export async function requireWebsiteAdminOrSuperAdmin(ctx: AppContext, websiteKey: string): Promise<WebsiteRow> {
   const actor = requireUser(ctx);
   const website = await getWebsite(ctx, websiteKey);
-  if (await isSuperAdmin(ctx)) return website;
+  if (!(await isWebsiteAdminOrSuperAdmin(ctx, website.id, actor.id))) throw ApiError.forbidden("Website admin required");
+  return website;
+}
+
+async function isWebsiteAdminOrSuperAdmin(ctx: AppContext, websiteId: number, userId: number): Promise<boolean> {
+  if (await isSuperAdmin(ctx)) return true;
   const hit = await ctx.db.first<{ hit: number }>(
     "SELECT 1 AS hit FROM website_admins WHERE website_id = ?1 AND user_id = ?2 LIMIT 1",
-    [website.id, actor.id]
+    [websiteId, userId]
   );
-  if (!hit) throw ApiError.forbidden("Website admin required");
-  return website;
+  return !!hit;
 }
 
 export async function requireNotWebsiteBanned(ctx: AppContext, websiteId: number): Promise<void> {
@@ -504,9 +530,13 @@ export async function updateComment(ctx: AppContext, websiteKey: string, comment
 }
 
 export async function deleteComment(ctx: AppContext, websiteKey: string, commentId: number): Promise<void> {
-  const website = await requireWebsiteAdminOrSuperAdmin(ctx, websiteKey);
+  const actor = requireUser(ctx);
+  const website = await getWebsite(ctx, websiteKey);
   const row = await getCommentRow(ctx, website.id, commentId);
   if (row.deleted_at) return;
+  if (row.user_id !== actor.id && !(await isWebsiteAdminOrSuperAdmin(ctx, website.id, actor.id))) {
+    throw ApiError.forbidden("You are not allowed to delete this comment");
+  }
   await ctx.db.execute("UPDATE comments SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND website_id = ?2", [commentId, website.id]);
   await ctx.db.execute("UPDATE pages SET comment_count = CASE WHEN comment_count > 0 THEN comment_count - 1 ELSE 0 END, updated_at = datetime('now') WHERE id = ?1", [row.page_id]);
 }

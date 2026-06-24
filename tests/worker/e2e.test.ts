@@ -188,10 +188,16 @@ describe("Atrium native Worker API", () => {
     expect((await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/invalid`)).status).toBe(422);
     expect((await bob.delete(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/heart`)).status).toBe(204);
 
+    const selfDelete = await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "self delete" });
+    expect(selfDelete.status).toBe(201);
+    const selfDeleteId = (await json(selfDelete)).id;
+    expect((await bob.delete(`/api/v1/websites/explicit-blog/comments/${selfDeleteId}`)).status).toBe(403);
+    expect((await alice.delete(`/api/v1/websites/explicit-blog/comments/${selfDeleteId}`)).status).toBe(204);
+
     expect((await owner.delete(`/api/v1/websites/explicit-blog/comments/${replyId}`)).status).toBe(204);
     const moderation = await owner.get("/api/v1/websites/explicit-blog/admin/comments?status=deleted&page_key=post-1");
     expect(moderation.status).toBe(200);
-    expect((await json(moderation)).data.map((item: any) => item.id)).toContain(replyId);
+    expect((await json(moderation)).data.map((item: any) => item.id)).toEqual(expect.arrayContaining([replyId, selfDeleteId]));
 
     const ban = await owner.post("/api/v1/websites/explicit-blog/bans", { user_id: 3, reason: "spam" });
     expect(ban.status).toBe(201);
