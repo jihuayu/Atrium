@@ -25,7 +25,7 @@ Important environment variables:
 - `ACCOUNT_BASE_URL`: account service origin, default `https://account.jihuayu.com`
 - `ACCOUNT_AUDIENCE`: account session introspection audience, default `atrium`
 - `ACCOUNT_INTERNAL_SECRET`: optional Worker secret sent as `x-internal-secret` to the account introspection endpoint
-- `ATRIUM_SUPER_ADMIN_ACCOUNT_IDS`: comma-separated Jihuayu Account `sub` values that can create/configure all websites
+- `ATRIUM_SUPER_ADMIN_ACCOUNT_IDS`: comma-separated Jihuayu Account `sub` values or email addresses that can create/configure all websites
 - `ATRIUM_TEST_BYPASS_SECRET`: local/CI-only HTTP test bypass secret
 
 Native login uses the parent-domain SSO cookie set by `account.jihuayu.com`:

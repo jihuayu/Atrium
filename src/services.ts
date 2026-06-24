@@ -198,13 +198,20 @@ export async function isSuperAdmin(ctx: AppContext): Promise<boolean> {
   if (!actor) return false;
   const ids = superAdminAccountIds(ctx);
   if (ids.length === 0) return false;
+  const lowerIds = ids.map((value) => value.toLowerCase());
   if (actor.account_sub && ids.includes(actor.account_sub)) return true;
-  const placeholders = ids.map((_, index) => `?${index + 2}`).join(", ");
-  const hit = await ctx.db.first<{ hit: number }>(
-    `SELECT 1 AS hit FROM user_identities WHERE user_id = ?1 AND provider = 'account' AND provider_user_id IN (${placeholders}) LIMIT 1`,
-    [actor.id, ...ids]
+  if (actor.email && lowerIds.includes(actor.email.toLowerCase())) return true;
+  const identities = await ctx.db.all<{ provider_user_id: string; identity_email: string; user_email: string }>(
+    "SELECT ui.provider_user_id, ui.email AS identity_email, u.email AS user_email FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.user_id = ?1 AND ui.provider = 'account'",
+    [actor.id]
   );
-  return Boolean(hit);
+  return identities.some((identity) => {
+    return (
+      ids.includes(identity.provider_user_id) ||
+      lowerIds.includes((identity.identity_email ?? "").toLowerCase()) ||
+      lowerIds.includes((identity.user_email ?? "").toLowerCase())
+    );
+  });
 }
 
 export async function requireSuperAdmin(ctx: AppContext): Promise<AuthUser> {

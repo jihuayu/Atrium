@@ -9,7 +9,7 @@ const workerDir = join(root, "deploy", "worker");
 const port = Number(process.env.ATRIUM_TEST_PORT ?? 8788);
 const bypassSecret = randomHex(16);
 const jwtSecret = crypto.randomUUID() + crypto.randomUUID();
-const superAdminAccountIds = "acct-super";
+const superAdminAccountIds = "super@test.com";
 const configPath = join(workerDir, `.wrangler.test.${process.pid}.toml`);
 
 function run(command: string, args: string[], env?: NodeJS.ProcessEnv, cwd = workerDir) {
