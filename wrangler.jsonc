@@ -15,7 +15,6 @@
   },
   "vars": {
     "BASE_URL": "https://atrium.jihuayu.com",
-    "TOKEN_CACHE_TTL": "3600",
     "ACCOUNT_BASE_URL": "https://account.jihuayu.com",
     "ACCOUNT_AUDIENCE": "atrium"
   },

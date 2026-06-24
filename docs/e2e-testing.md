@@ -31,6 +31,8 @@ The bypass is only active when `ATRIUM_TEST_BYPASS_SECRET` or the legacy `XTALK_
 
 The Worker E2E suite covers:
 
-- GitHub-compatible issues, comments, reactions, labels, search, markdown, user, and user export flows.
-- Native auth, Jihuayu Account SSO cookie login branches, admin settings, threads, comments, reactions, labels, exports, slug lookup, cursor pagination, and permission branches.
+- Removal of the old GitHub-compatible and repo/thread routes.
+- Native auth, Jihuayu Account SSO cookie login branches, and super-admin environment variable behavior.
+- Website creation, website admin management, page upsert, comments, replies, reactions, moderation, and website-scoped bans.
+- Quick `Referer` mode for resolving website/page records without explicit path parameters.
 - D1-backed read/write behavior through Wrangler local D1.

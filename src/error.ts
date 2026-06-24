@@ -39,14 +39,6 @@ export class ApiError extends Error {
     return new ApiError(500, message);
   }
 
-  githubBody() {
-    return {
-      message: this.message,
-      ...(this.errors.length > 0 ? { errors: this.errors } : {}),
-      documentation_url: "https://docs.github.com/rest"
-    };
-  }
-
   nativeBody() {
     const error =
       this.status === 400
@@ -57,9 +49,11 @@ export class ApiError extends Error {
             ? "forbidden"
             : this.status === 404
               ? "not_found"
-              : this.status === 422
-                ? "validation_failed"
-                : "internal_error";
+              : this.status === 409
+                ? "conflict"
+                : this.status === 422
+                  ? "validation_failed"
+                  : "internal_error";
     return { error, message: this.message };
   }
 }

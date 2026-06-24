@@ -9,6 +9,7 @@ const workerDir = join(root, "deploy", "worker");
 const port = Number(process.env.ATRIUM_TEST_PORT ?? 8788);
 const bypassSecret = randomHex(16);
 const jwtSecret = crypto.randomUUID() + crypto.randomUUID();
+const superAdminAccountIds = "acct-super";
 const configPath = join(workerDir, `.wrangler.test.${process.pid}.toml`);
 
 function run(command: string, args: string[], env?: NodeJS.ProcessEnv, cwd = workerDir) {
@@ -36,6 +37,7 @@ try {
       .replaceAll("__TEST_DB_ID__", "00000000-0000-0000-0000-000000000000")
       .replaceAll("__TEST_PORT__", String(port))
       .replaceAll("__TEST_BYPASS_SECRET__", bypassSecret)
+      .replaceAll("__TEST_SUPER_ADMIN_ACCOUNT_IDS__", superAdminAccountIds)
       .replaceAll("__TEST_JWT_SECRET__", jwtSecret)
   );
 

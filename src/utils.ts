@@ -2,7 +2,7 @@ import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
 import { ApiError } from "./error";
-import type { GitHubUser, ReactionCounts, Reactions } from "./types";
+import type { AuthUser, PublicUser, ReactionCounts } from "./types";
 import { EMPTY_REACTION_COUNTS } from "./types";
 
 export const ACCESS_COOKIE = "atrium_access";
@@ -39,13 +39,12 @@ export async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function toApiUser(user: GitHubUser) {
+export function toPublicUser(user: AuthUser, includeEmail = false): PublicUser {
   return {
-    login: user.login,
     id: user.id,
+    login: user.login,
     avatar_url: user.avatar_url,
-    html_url: `https://github.com/${user.login}`,
-    type: user.type
+    ...(includeEmail ? { email: user.email } : {})
   };
 }
 
@@ -164,41 +163,13 @@ export async function verifyProviderJwt(
 export function parseReactionCounts(raw: string | null | undefined): ReactionCounts {
   if (!raw) return { ...EMPTY_REACTION_COUNTS };
   try {
-    return { ...EMPTY_REACTION_COUNTS, ...JSON.parse(raw) };
+    const parsed = { ...EMPTY_REACTION_COUNTS, ...JSON.parse(raw) } as ReactionCounts;
+    parsed.total =
+      parsed.like + parsed.dislike + parsed.heart + parsed.laugh + parsed.hooray + parsed.confused + parsed.rocket + parsed.eyes;
+    return parsed;
   } catch {
     return { ...EMPTY_REACTION_COUNTS };
   }
-}
-
-export function reactionPayload(baseUrl: string, owner: string, repo: string, commentId: number, raw: string): Reactions {
-  const counts = parseReactionCounts(raw);
-  return {
-    url: `${baseUrl}/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
-    total_count: counts.total,
-    "+1": counts.plus_one,
-    "-1": counts.minus_one,
-    laugh: counts.laugh,
-    confused: counts.confused,
-    heart: counts.heart,
-    hooray: counts.hooray,
-    rocket: counts.rocket,
-    eyes: counts.eyes
-  };
-}
-
-export function emptyIssueReactions(baseUrl: string, owner: string, repo: string, number: number): Reactions {
-  return {
-    url: `${baseUrl}/repos/${owner}/${repo}/issues/${number}/reactions`,
-    total_count: 0,
-    "+1": 0,
-    "-1": 0,
-    laugh: 0,
-    confused: 0,
-    heart: 0,
-    hooray: 0,
-    rocket: 0,
-    eyes: 0
-  };
 }
 
 export function normalizePagination(page?: string | null, perPage?: string | null): { page: number; perPage: number; offset: number } {

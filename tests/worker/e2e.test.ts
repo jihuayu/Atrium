@@ -5,197 +5,203 @@ const bypassSecret = process.env.ATRIUM_TEST_BYPASS_SECRET ?? "atrium-test";
 
 class Client {
   constructor(private readonly auth?: string) {}
-  get(path: string) {
-    return this.request("GET", path);
+  get(path: string, headers?: Record<string, string>) {
+    return this.request("GET", path, undefined, headers);
   }
-  post(path: string, body?: unknown) {
-    return this.request("POST", path, body);
+  post(path: string, body?: unknown, headers?: Record<string, string>) {
+    return this.request("POST", path, body, headers);
   }
-  patch(path: string, body?: unknown) {
-    return this.request("PATCH", path, body);
+  put(path: string, body?: unknown, headers?: Record<string, string>) {
+    return this.request("PUT", path, body, headers);
   }
-  delete(path: string) {
-    return this.request("DELETE", path);
+  patch(path: string, body?: unknown, headers?: Record<string, string>) {
+    return this.request("PATCH", path, body, headers);
   }
-  private request(method: string, path: string, body?: unknown) {
-    const headers: Record<string, string> = {};
-    if (this.auth) headers.Authorization = this.auth;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+  delete(path: string, headers?: Record<string, string>) {
+    return this.request("DELETE", path, undefined, headers);
+  }
+  private request(method: string, path: string, body?: unknown, headers?: Record<string, string>) {
+    const requestHeaders: Record<string, string> = { ...(headers ?? {}) };
+    if (this.auth) requestHeaders.Authorization = this.auth;
+    if (body !== undefined) requestHeaders["Content-Type"] = "application/json";
     return fetch(`${baseUrl}${path}`, {
       method,
-      headers,
+      headers: requestHeaders,
       body: body === undefined ? undefined : JSON.stringify(body)
     });
   }
 }
 
 const anon = new Client();
-const admin = user(1, "admin");
-const alice = user(2, "alice");
-const bob = user(3, "bob");
+const superAdmin = user(1, "super", "acct-super");
+const owner = user(2, "owner", "acct-owner");
+const alice = user(3, "alice", "acct-alice");
+const bob = user(4, "bob", "acct-bob");
 
-function user(id: number, login: string) {
-  return new Client(`testuser ${bypassSecret}:${id}:${login}:${login}@test.com`);
+function user(id: number, login: string, accountSub: string) {
+  return new Client(`testuser ${bypassSecret}:${id}:${login}:${login}@test.com:${accountSub}`);
 }
 
 async function json(response: Response) {
-  return await response.json() as any;
+  return (await response.json()) as any;
 }
 
-async function seedIssue(client: Client, owner: string, repo: string, title: string) {
-  const response = await client.post(`/repos/${owner}/${repo}/issues`, { title, body: "body" });
-  expect(response.status).toBe(201);
-  return (await json(response)).number as number;
+async function ensureUsers() {
+  for (const client of [superAdmin, owner, alice, bob]) {
+    const response = await client.get("/api/v1/auth/me");
+    expect(response.status).toBe(200);
+  }
 }
 
-async function seedComment(client: Client, owner: string, repo: string, number: number, body: string) {
-  const response = await client.post(`/repos/${owner}/${repo}/issues/${number}/comments`, { body });
-  expect(response.status).toBe(201);
-  return (await json(response)).id as number;
+async function createWebsite(key: string, origin: string) {
+  const created = await superAdmin.post("/api/v1/websites", {
+    key,
+    name: key,
+    origins: [origin],
+    admin_user_ids: [2]
+  });
+  expect(created.status).toBe(201);
 }
 
-describe("Atrium Worker API", () => {
-  test("root, markdown, user, and user export", async () => {
+describe("Atrium native Worker API", () => {
+  test("root and removed GitHub-compatible routes", async () => {
     const root = await anon.get("/");
     expect(root.status).toBe(200);
-    expect(await root.text()).toContain("Atrium");
+    expect(await root.text()).toContain("website/page/comment");
 
-    const markdown = await anon.post("/markdown", { text: "**hello**" });
-    expect(markdown.status).toBe(200);
-    expect(await markdown.text()).toContain("<strong>hello</strong>");
-
-    expect((await anon.get("/user")).status).toBe(401);
-    const userResponse = await admin.get("/user");
-    expect(userResponse.status).toBe(200);
-    expect((await json(userResponse)).login).toBe("admin");
-
-    await seedIssue(admin, "e2e", "compat-user-export", "export me");
-    expect((await anon.get("/user/export")).status).toBe(401);
-    const exported = await admin.get("/user/export");
-    expect(exported.status).toBe(200);
-    const body = await json(exported);
-    expect(body.schema_version).toBe(1);
-    expect(body.repos.length).toBeGreaterThan(0);
+    expect((await anon.get("/repos/e2e/repo/issues")).status).toBe(404);
+    expect((await anon.post("/repos/e2e/repo/issues", { title: "old" })).status).toBe(404);
+    expect((await anon.get("/api/v1/repos/e2e/repo/threads")).status).toBe(404);
+    expect((await anon.get("/search/issues?q=x")).status).toBe(404);
+    expect((await anon.post("/markdown", { text: "**old**" })).status).toBe(404);
   });
 
-  test("compatible issues support auth, filters, validation, labels, close, and delete", async () => {
-    const owner = "e2e";
-    const repo = "compat-issues";
-    expect((await anon.post(`/repos/${owner}/${repo}/issues`, { title: "no" })).status).toBe(401);
-    const aliceNumber = await seedIssue(alice, owner, repo, "alice issue");
-    await seedIssue(bob, owner, repo, "bob issue");
+  test("super admin env gates website creation and website admin management", async () => {
+    await ensureUsers();
 
-    expect((await alice.post(`/repos/${owner}/${repo}/issues`, { title: " " })).status).toBe(422);
-    expect((await alice.post(`/repos/${owner}/${repo}/issues`, { title: "with labels", labels: ["enhancement"] })).status).toBe(201);
-    expect((await bob.patch(`/repos/${owner}/${repo}/issues/${aliceNumber}`, { title: "bob edit" })).status).toBe(403);
+    expect((await json(await superAdmin.get("/api/v1/auth/me"))).super_admin).toBe(true);
+    expect((await json(await owner.get("/api/v1/auth/me"))).super_admin).toBe(false);
+    expect((await owner.post("/api/v1/websites", { key: "nope", name: "Nope" })).status).toBe(403);
 
-    const patched = await alice.patch(`/repos/${owner}/${repo}/issues/${aliceNumber}`, {
-      state: "closed",
-      state_reason: "completed",
-      labels: ["bug"]
+    const created = await superAdmin.post("/api/v1/websites", {
+      key: "admin-blog",
+      name: "Blog",
+      origins: ["https://blog.example.com"],
+      admin_user_ids: [2]
+    });
+    expect(created.status).toBe(201);
+    expect((await json(created)).origins).toEqual(["https://blog.example.com"]);
+
+    const patched = await owner.patch("/api/v1/websites/admin-blog", {
+      name: "Blog Updated",
+      origins: ["https://blog.example.com", "https://www.blog.example.com"]
     });
     expect(patched.status).toBe(200);
-    expect((await json(patched)).closed_at).toBeTruthy();
+    expect((await json(patched)).name).toBe("Blog Updated");
 
-    const byCreator = await anon.get(`/repos/${owner}/${repo}/issues?state=all&creator=alice`);
-    expect((await json(byCreator)).some((item: any) => item.number === aliceNumber)).toBe(true);
+    const admins = await owner.get("/api/v1/websites/admin-blog/admins");
+    expect(admins.status).toBe(200);
+    expect((await json(admins)).data.map((entry: any) => entry.user.id)).toContain(2);
 
-    const byLabel = await anon.get(`/repos/${owner}/${repo}/issues?state=all&labels=bug`);
-    expect((await json(byLabel)).some((item: any) => item.number === aliceNumber)).toBe(true);
-
-    expect((await alice.patch(`/repos/${owner}/${repo}/issues/${aliceNumber}`, { state: "invalid-state" })).status).toBe(422);
-
-    const deleteRepo = "compat-issues-delete";
-    const deleteNumber = await seedIssue(admin, owner, deleteRepo, "delete me");
-    expect((await admin.delete(`/api/v1/repos/${owner}/${deleteRepo}/threads/${deleteNumber}`)).status).toBe(204);
-    expect((await anon.get(`/repos/${owner}/${deleteRepo}/issues/${deleteNumber}`)).status).toBe(404);
+    expect((await owner.delete("/api/v1/websites/admin-blog/admins/1")).status).toBe(204);
+    expect((await owner.delete("/api/v1/websites/admin-blog/admins/2")).status).toBe(403);
+    expect((await superAdmin.post("/api/v1/websites/admin-blog/admins", { user_id: 1 })).status).toBe(201);
   });
 
-  test("compatible comments paginate, update counts, validate, and enforce ownership", async () => {
-    const owner = "e2e";
-    const repo = "compat-comments";
-    const number = await seedIssue(admin, owner, repo, "thread");
-    const first = await seedComment(alice, owner, repo, number, "first");
-    await seedComment(alice, owner, repo, number, "second");
+  test("explicit page, comments, replies, reactions, moderation, and bans", async () => {
+    await ensureUsers();
+    await createWebsite("explicit-blog", "https://explicit.example.com");
 
-    const list = await anon.get(`/repos/${owner}/${repo}/issues/${number}/comments?per_page=1&page=1`);
-    expect(list.status).toBe(200);
-    expect(list.headers.get("link")).toBeTruthy();
-    expect((await json(await anon.get(`/repos/${owner}/${repo}/issues/${number}`))).comments).toBe(2);
+    const page = await owner.put("/api/v1/websites/explicit-blog/pages/post-1", {
+      title: "Post 1",
+      url: "https://explicit.example.com/post-1?b=2&a=1#section",
+      metadata: { source: "test" }
+    });
+    expect(page.status).toBe(200);
+    const pageBody = await json(page);
+    expect(pageBody.normalized_url).toBe("https://explicit.example.com/post-1?a=1&b=2");
 
-    expect((await bob.patch(`/repos/${owner}/${repo}/issues/comments/${first}`, { body: "bob" })).status).toBe(403);
-    expect((await alice.patch(`/repos/${owner}/${repo}/issues/comments/${first}`, { body: "alice edit" })).status).toBe(200);
-    expect((await alice.patch(`/repos/${owner}/${repo}/issues/comments/${first}`, { body: "" })).status).toBe(422);
-    expect((await alice.delete(`/repos/${owner}/${repo}/issues/comments/${first}`)).status).toBe(204);
-    expect((await json(await anon.get(`/repos/${owner}/${repo}/issues/${number}`))).comments).toBe(1);
+    const comment = await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "hello" });
+    expect(comment.status).toBe(201);
+    const commentId = (await json(comment)).id;
+
+    const reply = await bob.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "reply", parent_id: commentId });
+    expect(reply.status).toBe(201);
+    const replyId = (await json(reply)).id;
+
+    const roots = await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
+    expect(roots.status).toBe(200);
+    expect((await json(roots)).data.map((item: any) => item.id)).toContain(commentId);
+
+    const replies = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}`);
+    expect(replies.status).toBe(200);
+    expect((await json(replies)).data.map((item: any) => item.id)).toEqual([replyId]);
+
+    expect((await bob.patch(`/api/v1/websites/explicit-blog/comments/${commentId}`, { body: "bob edit" })).status).toBe(403);
+    const edited = await alice.patch(`/api/v1/websites/explicit-blog/comments/${commentId}`, { body: "alice edit" });
+    expect(edited.status).toBe(200);
+    expect((await json(edited)).body).toBe("alice edit");
+
+    const reaction = await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/heart`);
+    expect(reaction.status).toBe(200);
+    expect((await json(reaction)).heart).toBe(1);
+    const duplicateReaction = await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/heart`);
+    expect((await json(duplicateReaction)).heart).toBe(1);
+    expect((await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/invalid`)).status).toBe(422);
+    expect((await bob.delete(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/heart`)).status).toBe(204);
+
+    expect((await owner.delete(`/api/v1/websites/explicit-blog/comments/${replyId}`)).status).toBe(204);
+    const moderation = await owner.get("/api/v1/websites/explicit-blog/admin/comments?status=deleted&page_key=post-1");
+    expect(moderation.status).toBe(200);
+    expect((await json(moderation)).data.map((item: any) => item.id)).toContain(replyId);
+
+    const ban = await owner.post("/api/v1/websites/explicit-blog/bans", { user_id: 3, reason: "spam" });
+    expect(ban.status).toBe(201);
+    expect((await json(ban)).data.map((entry: any) => entry.user.id)).toContain(3);
+    expect((await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "blocked" })).status).toBe(403);
+    expect((await alice.patch(`/api/v1/websites/explicit-blog/comments/${commentId}`, { body: "blocked" })).status).toBe(403);
+    expect((await alice.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/like`)).status).toBe(403);
+    expect((await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root")).status).toBe(200);
+    expect((await owner.delete("/api/v1/websites/explicit-blog/bans/3")).status).toBe(204);
+    expect((await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "after unban" })).status).toBe(201);
   });
 
-  test("reactions are idempotent and exposed through compatible and native APIs", async () => {
-    const owner = "e2e";
-    const repo = "compat-reactions";
-    const number = await seedIssue(admin, owner, repo, "thread");
-    const commentId = await seedComment(alice, owner, repo, number, "comment");
+  test("quick Referer mode resolves website and page without creating websites", async () => {
+    await ensureUsers();
+    await createWebsite("quick-blog", "https://quick.example.com");
 
-    const first = await bob.post(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, { content: "+1" });
-    expect(first.status).toBe(201);
-    const reactionId = (await json(first)).id;
-    expect((await bob.post(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, { content: "+1" })).status).toBe(200);
-    expect((await alice.delete(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions/${reactionId}`)).status).toBe(403);
-    expect((await bob.delete(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions/${reactionId}`)).status).toBe(204);
+    expect((await anon.get("/api/v1/comments/current")).status).toBe(400);
+    const unmatched = await anon.get("/api/v1/comments/current", { Referer: "https://unknown.example.com/post" });
+    expect(unmatched.status).toBe(404);
+    expect((await json(unmatched)).message).toBe("website_not_found");
 
-    expect((await alice.post(`/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, { content: "invalid" })).status).toBe(422);
-    const native = await alice.post(`/api/v1/repos/${owner}/${repo}/comments/${commentId}/reactions`, { content: "heart" });
-    expect(native.status).toBe(201);
-    expect((await json(native)).heart).toBe(1);
-    expect((await alice.delete(`/api/v1/repos/${owner}/${repo}/comments/${commentId}/reactions/heart`)).status).toBe(204);
-  });
+    const referer = "https://quick.example.com/quick-post?z=9&a=1#comments";
+    const current = await anon.get("/api/v1/comments/current?page_title=Quick%20Post", { Referer: referer });
+    expect(current.status).toBe(200);
+    const currentBody = await json(current);
+    expect(currentBody.website.key).toBe("quick-blog");
+    expect(currentBody.page.key).toMatch(/^url-/);
+    expect(currentBody.page.normalized_url).toBe("https://quick.example.com/quick-post?a=1&z=9");
 
-  test("search, labels, native threads, comments, admin, auth, and export", async () => {
-    const owner = "e2e";
-    const repo = "native-all";
-    const n1 = await seedIssue(admin, owner, repo, "hello bug");
-    await admin.patch(`/repos/${owner}/${repo}/issues/${n1}`, { labels: ["bug"] });
+    const quickComment = await alice.post("/api/v1/comments/current", { body: "quick" }, { Referer: referer });
+    expect(quickComment.status).toBe(201);
+    const quickCommentId = (await json(quickComment)).id;
 
-    const search = await anon.get(`/search/issues?q=hello%20repo:${owner}/${repo}%20label:bug`);
-    expect(search.status).toBe(200);
-    expect((await json(search)).items.length).toBeGreaterThan(0);
+    const quickReply = await bob.post("/api/v1/comments/current", { body: "quick reply", parent_id: quickCommentId }, { Referer: referer });
+    expect(quickReply.status).toBe(201);
+    const quickReplyId = (await json(quickReply)).id;
 
-    expect((await alice.post(`/api/v1/repos/${owner}/${repo}/labels`, { name: "x" })).status).toBe(403);
-    expect((await admin.post(`/api/v1/repos/${owner}/${repo}/labels`, { name: "x" })).status).toBe(201);
-    expect((await anon.get(`/api/v1/repos/${owner}/${repo}/labels`)).status).toBe(200);
+    const replies = await anon.get(`/api/v1/comments/current/replies?comment_id=${quickCommentId}`, { Referer: referer });
+    expect(replies.status).toBe(200);
+    expect((await json(replies)).data.map((item: any) => item.id)).toEqual([quickReplyId]);
 
-    const created = await alice.post(`/api/v1/repos/${owner}/${repo}/threads`, { title: "My Article", body: "hello", slug: "my-article" });
-    expect(created.status).toBe(201);
-    expect((await alice.post(`/api/v1/repos/${owner}/${repo}/threads`, { title: "dup", slug: "my-article" })).status).toBe(409);
-    const lookup = await anon.get(`/api/v1/repos/${owner}/${repo}/threads?slug=my-article&state=all`);
-    expect((await json(lookup)).data).toHaveLength(1);
+    const reaction = await bob.put(`/api/v1/comments/current/${quickCommentId}/reactions/like`, undefined, { Referer: referer });
+    expect(reaction.status).toBe(200);
+    expect((await json(reaction)).like).toBe(1);
 
-    const comments = await alice.post(`/api/v1/repos/${owner}/${repo}/threads/${(await json(created)).number}/comments`, { body: "native comment" });
-    expect(comments.status).toBe(201);
-    expect((await anon.get(`/api/v1/repos/${owner}/${repo}/threads?limit=1&direction=asc&state=all`)).status).toBe(200);
-
-    expect((await anon.get("/api/v1/auth/me")).status).toBe(401);
-    expect((await admin.get("/api/v1/auth/me")).status).toBe(200);
-    const accountStart = await fetch(`${baseUrl}/api/v1/auth/account/authorize?redirect_uri=https://app.jihuayu.com/done&state=s1`, { redirect: "manual" });
-    expect(accountStart.status).toBe(302);
-    const accountLocation = accountStart.headers.get("location") ?? "";
-    expect(accountLocation).toContain("https://account.jihuayu.com/login");
-    const accountReturnTo = new URL(accountLocation).searchParams.get("return_to") ?? "";
-    const callbackUrl = new URL(accountReturnTo);
-    expect(callbackUrl.pathname).toBe("/api/v1/auth/account/callback");
-    expect(callbackUrl.searchParams.get("redirect_uri")).toBe("https://app.jihuayu.com/done");
-    expect(callbackUrl.searchParams.get("state")).toBe("s1");
-    expect((await anon.post("/api/v1/auth/account")).status).toBe(401);
-    expect((await anon.post("/api/v1/auth/google", { token: "fake" })).status).toBe(501);
-    expect((await anon.post("/api/v1/auth/refresh")).status).toBe(401);
-
-    expect((await alice.get(`/api/v1/repos/${owner}/${repo}/export`)).status).toBe(403);
-    const exported = await admin.get(`/api/v1/repos/${owner}/${repo}/export?format=json`);
-    expect(exported.status).toBe(200);
-    expect((await json(exported)).threads.length).toBeGreaterThan(0);
-    const csv = await admin.get(`/api/v1/repos/${owner}/${repo}/export?format=csv`);
-    expect(csv.status).toBe(200);
-    expect(await csv.text()).toContain("thread_number");
-    expect((await admin.get(`/api/v1/repos/${owner}/${repo}/export?format=xml`)).status).toBe(400);
+    expect((await owner.post("/api/v1/websites/quick-blog/bans", { user_id: 3, reason: "quick spam" })).status).toBe(201);
+    expect((await alice.post("/api/v1/comments/current", { body: "blocked" }, { Referer: referer })).status).toBe(403);
+    expect((await alice.put(`/api/v1/comments/current/${quickCommentId}/reactions/heart`, undefined, { Referer: referer })).status).toBe(403);
+    expect((await anon.get("/api/v1/comments/current", { Referer: referer })).status).toBe(200);
   });
 });

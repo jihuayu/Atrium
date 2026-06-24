@@ -1,7 +1,5 @@
--- Combined schema for test initialization (0001 + 0002 + 0003 + 0004 + 0005 merged)
--- This file represents the final table structure after all migrations.
--- Used by scripts/test-worker.ts for fresh D1 test databases to avoid
--- migration rename/drop operations that conflict with D1's FK enforcement.
+-- Combined native schema for Worker tests.
+-- Used by scripts/test-worker.ts for fresh D1 test databases.
 
 CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_user_identities_email ON user_identities(email);
 
 CREATE TABLE IF NOT EXISTS token_cache (
     token_hash TEXT NOT NULL,
-    provider   TEXT NOT NULL DEFAULT 'github'
+    provider   TEXT NOT NULL DEFAULT 'account'
                CHECK(provider IN ('github','google','apple','xtalk','account')),
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     cached_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -56,79 +54,80 @@ CREATE TABLE IF NOT EXISTS jwks_cache (
     expires_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS repos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner TEXT NOT NULL,
-    name TEXT NOT NULL,
-    owner_user_id INTEGER REFERENCES users(id),
-    admin_user_id INTEGER,
-    issue_counter INTEGER NOT NULL DEFAULT 0,
+CREATE TABLE IF NOT EXISTS websites (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    key        TEXT NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(owner, name)
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS issues (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo_id INTEGER NOT NULL REFERENCES repos(id),
-    number INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    body TEXT,
-    state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','closed')),
-    state_reason TEXT,
-    locked INTEGER NOT NULL DEFAULT 0,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    comment_count INTEGER NOT NULL DEFAULT 0,
+CREATE TABLE IF NOT EXISTS website_origins (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    website_id INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    origin     TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    closed_at TEXT,
-    deleted_at TEXT,
-    slug TEXT,
-    UNIQUE(repo_id, number)
+    UNIQUE(website_id, origin),
+    UNIQUE(origin)
+);
+
+CREATE TABLE IF NOT EXISTS website_admins (
+    website_id INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (website_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS pages (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    website_id     INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    key            TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    url            TEXT NOT NULL DEFAULT '',
+    normalized_url TEXT NOT NULL DEFAULT '',
+    metadata       TEXT,
+    comment_count  INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(website_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS comments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo_id INTEGER NOT NULL REFERENCES repos(id),
-    issue_id INTEGER NOT NULL REFERENCES issues(id),
-    body TEXT NOT NULL,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    deleted_at TEXT,
-    reactions TEXT NOT NULL DEFAULT '{}'
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    website_id        INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    page_id           INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    parent_comment_id INTEGER REFERENCES comments(id),
+    body              TEXT NOT NULL,
+    user_id           INTEGER NOT NULL REFERENCES users(id),
+    reactions         TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at        TEXT
 );
 
-CREATE TABLE IF NOT EXISTS labels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo_id INTEGER NOT NULL REFERENCES repos(id),
-    name TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    color TEXT NOT NULL DEFAULT 'ededed',
-    UNIQUE(repo_id, name)
-);
-
-CREATE TABLE IF NOT EXISTS issue_labels (
-    issue_id INTEGER NOT NULL REFERENCES issues(id),
-    label_id INTEGER NOT NULL REFERENCES labels(id),
-    PRIMARY KEY (issue_id, label_id)
-);
-
-CREATE TABLE IF NOT EXISTS reactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    comment_id INTEGER NOT NULL REFERENCES comments(id),
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    content TEXT NOT NULL CHECK(
-        content IN ('+1','-1','laugh','confused','heart','hooray','rocket','eyes')
-    ),
+CREATE TABLE IF NOT EXISTS comment_reactions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL CHECK(content IN ('like','dislike','heart','laugh','hooray','confused','rocket','eyes')),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(comment_id, user_id, content)
 );
 
-CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo_id, state, deleted_at);
-CREATE INDEX IF NOT EXISTS idx_issues_repo_number ON issues(repo_id, number);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_repo_slug
-    ON issues(repo_id, slug)
-    WHERE slug IS NOT NULL AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id, deleted_at);
-CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
-CREATE INDEX IF NOT EXISTS idx_repos_owner_user_id ON repos(owner_user_id);
+CREATE TABLE IF NOT EXISTS website_bans (
+    website_id        INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason            TEXT,
+    banned_by_user_id INTEGER REFERENCES users(id),
+    banned_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    unbanned_at       TEXT,
+    PRIMARY KEY (website_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_website_admins_user ON website_admins(user_id);
+CREATE INDEX IF NOT EXISTS idx_pages_website_key ON pages(website_id, key);
+CREATE INDEX IF NOT EXISTS idx_pages_website_updated ON pages(website_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_comments_page_parent ON comments(page_id, parent_comment_id, id);
+CREATE INDEX IF NOT EXISTS idx_comments_website_user ON comments(website_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment ON comment_reactions(comment_id);
+CREATE INDEX IF NOT EXISTS idx_website_bans_user ON website_bans(user_id, unbanned_at);

@@ -12,7 +12,7 @@ import {
 import { ApiError } from "../../src/error";
 
 describe("utils", () => {
-  test("parses compatible auth headers", () => {
+  test("parses auth headers", () => {
     expect(parseToken("token abc")).toBe("abc");
     expect(parseToken("Bearer xyz")).toBe("xyz");
     expect(parseToken("bad xyz")).toBeNull();

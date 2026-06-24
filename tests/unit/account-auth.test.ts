@@ -15,7 +15,6 @@ function ctx(overrides: Partial<AppContext["env"]> = {}): AppContext {
       ...overrides
     },
     baseUrl: "https://atrium.jihuayu.com",
-    tokenCacheTtl: 3600,
     jwtSecret,
     statefulSessions: false
   };

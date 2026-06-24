@@ -5,10 +5,10 @@ compatibility_date = "2026-06-24"
 
 [vars]
 BASE_URL = "http://localhost:__TEST_PORT__"
-TOKEN_CACHE_TTL = "3600"
 ACCOUNT_BASE_URL = "https://account.jihuayu.com"
 ACCOUNT_AUDIENCE = "atrium"
 ATRIUM_TEST_BYPASS_SECRET = "__TEST_BYPASS_SECRET__"
+ATRIUM_SUPER_ADMIN_ACCOUNT_IDS = "__TEST_SUPER_ADMIN_ACCOUNT_IDS__"
 JWT_SECRET = "__TEST_JWT_SECRET__"
 
 [[d1_databases]]
