@@ -98,11 +98,15 @@ export function decodeCursor(cursor: string): number {
 }
 
 export function buildSetCookie(name: string, value: string, maxAgeSecs: number, secure: boolean): string {
-  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSecs}${secure ? "; Secure" : ""}`;
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=${cookieSameSite(secure)}; Max-Age=${maxAgeSecs}${secure ? "; Secure" : ""}`;
 }
 
 export function clearCookie(name: string, secure: boolean): string {
-  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
+  return `${name}=; Path=/; HttpOnly; SameSite=${cookieSameSite(secure)}; Max-Age=0${secure ? "; Secure" : ""}`;
+}
+
+function cookieSameSite(secure: boolean): "None" | "Lax" {
+  return secure ? "None" : "Lax";
 }
 
 export function cookieValue(header: string | null | undefined, name: string): string | null {

@@ -27,6 +27,9 @@ describe("utils", () => {
   test("cookies match worker transport shape", () => {
     expect(buildSetCookie("atrium_access", "tok", 60, true)).toContain("HttpOnly");
     expect(buildSetCookie("atrium_access", "tok", 60, true)).toContain("Secure");
+    expect(buildSetCookie("atrium_access", "tok", 60, true)).toContain("SameSite=None");
+    expect(buildSetCookie("atrium_access", "tok", 60, false)).toContain("SameSite=Lax");
+    expect(clearCookie("atrium_access", true)).toContain("SameSite=None");
     expect(clearCookie("atrium_access", false)).toContain("Max-Age=0");
     expect(cookieValue("a=1; atrium_access=tok", "atrium_access")).toBe("tok");
   });
