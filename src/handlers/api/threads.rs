@@ -31,6 +31,8 @@ async fn list_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppR
         limit: query_i64(&req, "limit"),
         cursor: query_value(&req, "cursor"),
         direction: query_value(&req, "direction"),
+        slug: query_value(&req, "slug"),
+        title: query_value(&req, "title"),
     };
 
     let _repo = services::repo::get_repo(ctx, &owner, &repo).await?;
@@ -55,6 +57,24 @@ async fn list_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<AppR
         filters.push(format!("i.state = ?{}", idx));
         params.push(DbValue::Text(state));
         idx += 1;
+    }
+
+    if let Some(slug) = &query.slug {
+        let slug = slug.trim();
+        if !slug.is_empty() {
+            filters.push(format!("i.slug = ?{}", idx));
+            params.push(DbValue::Text(slug.to_string()));
+            idx += 1;
+        }
+    }
+
+    if let Some(title) = &query.title {
+        let title = title.trim();
+        if !title.is_empty() {
+            filters.push(format!("i.title = ?{}", idx));
+            params.push(DbValue::Text(title.to_string()));
+            idx += 1;
+        }
     }
 
     if let Some(cursor_id) = cursor_id {

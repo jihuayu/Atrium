@@ -114,6 +114,8 @@ pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
         "\n",
         "Native API (JWT auth):\n",
         "  POST   /api/v1/auth/github\n",
+        "  GET    /api/v1/auth/github/authorize\n",
+        "  GET    /api/v1/auth/github/callback\n",
         "  POST   /api/v1/auth/google\n",
         "  POST   /api/v1/auth/apple\n",
         "  POST   /api/v1/auth/refresh\n",

@@ -42,6 +42,14 @@ impl AppResponse {
         }
     }
 
+    pub fn redirect(location: &str) -> Self {
+        Self {
+            status: 302,
+            headers: vec![("Location".to_string(), location.to_string())],
+            body: Bytes::new(),
+        }
+    }
+
     pub fn with_header(mut self, key: &str, value: &str) -> Self {
         self.headers.push((key.to_string(), value.to_string()));
         self
@@ -55,6 +63,8 @@ impl AppResponse {
 #[derive(Clone)]
 enum Route {
     ApiAuthGithub,
+    ApiAuthGithubAuthorize,
+    ApiAuthGithubCallback,
     ApiAuthGoogle,
     ApiAuthApple,
     ApiAuthRefresh,
@@ -127,6 +137,20 @@ impl AppRouter {
         router
             .get
             .insert("/api/v1/auth/me", Route::ApiAuthMe)
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/auth/github/authorize",
+                Route::ApiAuthGithubAuthorize,
+            )
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/auth/github/callback",
+                Route::ApiAuthGithubCallback,
+            )
             .unwrap();
         router
             .get
@@ -402,6 +426,12 @@ impl AppRouter {
 
         match matched.value {
             Route::ApiAuthGithub => handlers::api::auth::github(req, ctx).await,
+            Route::ApiAuthGithubAuthorize => {
+                handlers::api::auth::github_authorize(req, ctx).await
+            }
+            Route::ApiAuthGithubCallback => {
+                handlers::api::auth::github_callback(req, ctx).await
+            }
             Route::ApiAuthGoogle => handlers::api::auth::google(req, ctx).await,
             Route::ApiAuthApple => handlers::api::auth::apple(req, ctx).await,
             Route::ApiAuthRefresh => handlers::api::auth::refresh(req, ctx).await,
@@ -597,6 +627,8 @@ mod tests {
             jwt_secret: &secret,
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };

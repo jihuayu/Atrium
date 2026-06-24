@@ -81,6 +81,9 @@ impl TestApp {
             b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();

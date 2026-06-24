@@ -142,6 +142,8 @@ mod tests {
             jwt_secret: &secret,
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };
@@ -208,6 +210,8 @@ mod tests {
             jwt_secret: &secret,
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };

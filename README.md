@@ -17,6 +17,9 @@ Atrium 的目标是：
 - GitHub Issues API 兼容接口（issues / comments / reactions / search）
 - Native API（JWT）用于更完整的站内能力
 - 多 Provider 认证（GitHub / Google / Apple）
+- 原生 GitHub OAuth 登录流程（`/api/v1/auth/github/authorize` + `/callback`）
+- HttpOnly + Secure + SameSite Cookie 存储 access/refresh token
+- Thread slug 查询（`?slug=` O(1) 查找，替代线性扫描）
 - 本地 SQLite 或 Cloudflare D1
 - 轻量、低运维成本
 
@@ -34,6 +37,11 @@ cargo run --features server --bin atrium-server
 - `ATRIUM_DATABASE_URL`（兼容 `XTALK_DATABASE_URL`）
 - `ATRIUM_JWT_SECRET`（兼容 `XTALK_JWT_SECRET`）
 - `ATRIUM_LISTEN`（兼容 `XTALK_LISTEN`）
+- `ATRIUM_CORS_ORIGIN`（兼容 `XTALK_CORS_ORIGIN`）— 前端域名，启用后 CORS 允许携带凭证（cookie）
+- `ATRIUM_GITHUB_CLIENT_ID`（兼容 `XTALK_GITHUB_CLIENT_ID`）— GitHub OAuth App client id，启用原生 OAuth 登录
+- `ATRIUM_GITHUB_CLIENT_SECRET`（兼容 `XTALK_GITHUB_CLIENT_SECRET`）— GitHub OAuth App client secret
+- `ATRIUM_GOOGLE_CLIENT_ID`（兼容 `XTALK_GOOGLE_CLIENT_ID`）
+- `ATRIUM_APPLE_APP_ID`（兼容 `XTALK_APPLE_APP_ID`）
 
 ### 2. Cloudflare Worker
 

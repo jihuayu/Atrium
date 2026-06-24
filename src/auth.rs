@@ -22,6 +22,22 @@ pub trait HttpClient: Send + Sync {
         body: &[u8],
         headers: &HashMap<String, String>,
     ) -> Result<UpstreamResponse>;
+    /// Exchange a GitHub OAuth authorization code for a GitHub access token.
+    ///
+    /// Returns the raw GitHub access token string on success. The default
+    /// implementation returns an error so mock HTTP clients in tests don't
+    /// need to implement it unless they exercise the OAuth flow.
+    async fn exchange_github_oauth_code(
+        &self,
+        _code: &str,
+        _client_id: &str,
+        _client_secret: &str,
+        _redirect_uri: &str,
+    ) -> Result<String> {
+        Err(ApiError::internal(
+            "github oauth code exchange is not configured for this http client",
+        ))
+    }
 }
 
 pub struct UpstreamResponse {

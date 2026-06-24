@@ -183,3 +183,86 @@ async fn native_threads_get_desc_cursor_and_delete_not_found() {
         .unwrap();
     assert_eq!(missing_delete.status(), 404);
 }
+
+#[tokio::test]
+async fn native_threads_slug_create_lookup_and_uniqueness() {
+    let app = TestApp::start().await;
+    let owner = "e2e";
+    let repo = "native-threads-slug";
+
+    // Create a thread with a slug via the native API.
+    let created = app
+        .as_alice()
+        .post(&app.url(&format!("/api/v1/repos/{}/{}/threads", owner, repo)))
+        .json(&serde_json::json!({
+            "title": "My Article",
+            "body": "hello",
+            "slug": "my-article"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created_body: serde_json::Value = created.json().await.unwrap();
+    assert_eq!(created_body["slug"].as_str().unwrap(), "my-article");
+    assert_eq!(created_body["title"].as_str().unwrap(), "My Article");
+
+    // Duplicate slug must be rejected.
+    let dup = app
+        .as_alice()
+        .post(&app.url(&format!("/api/v1/repos/{}/{}/threads", owner, repo)))
+        .json(&serde_json::json!({
+            "title": "Other Article",
+            "slug": "my-article"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dup.status(), 409);
+
+    // Lookup by ?slug= returns the thread directly.
+    let lookup = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads?slug=my-article&state=all",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(lookup.status(), 200);
+    let lookup_body: serde_json::Value = lookup.json().await.unwrap();
+    let data = lookup_body["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["slug"].as_str().unwrap(), "my-article");
+
+    // Lookup by ?title= also works.
+    let title_lookup = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads?title=My%20Article&state=all",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(title_lookup.status(), 200);
+    let title_body: serde_json::Value = title_lookup.json().await.unwrap();
+    let title_data = title_body["data"].as_array().unwrap();
+    assert_eq!(title_data.len(), 1);
+    assert_eq!(title_data[0]["title"].as_str().unwrap(), "My Article");
+
+    // A non-matching slug returns an empty page.
+    let miss = app
+        .as_anon()
+        .get(&app.url(&format!(
+            "/api/v1/repos/{}/{}/threads?slug=does-not-exist&state=all",
+            owner, repo
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(miss.status(), 200);
+    let miss_body: serde_json::Value = miss.json().await.unwrap();
+    assert!(miss_body["data"].as_array().unwrap().is_empty());
+}

@@ -123,6 +123,8 @@ async fn dispatch(
                 jwt_secret: &state.jwt_secret,
                 google_client_id: state.google_client_id.as_deref(),
                 apple_app_id: state.apple_app_id.as_deref(),
+                github_client_id: None,
+                github_client_secret: None,
                 stateful_sessions: false,
                 test_bypass_secret: state.test_bypass_secret.as_deref(),
             };
@@ -153,6 +155,8 @@ async fn dispatch(
         jwt_secret: &state.jwt_secret,
         google_client_id: state.google_client_id.as_deref(),
         apple_app_id: state.apple_app_id.as_deref(),
+        github_client_id: None,
+        github_client_secret: None,
         stateful_sessions: false,
         test_bypass_secret: state.test_bypass_secret.as_deref(),
     };

@@ -98,6 +98,7 @@ mod tests {
             node_id: "n".to_string(),
             number: 1,
             title: "t".to_string(),
+            slug: None,
             body: Some("body".to_string()),
             body_html: Some("<p>body</p>".to_string()),
             state: "open".to_string(),

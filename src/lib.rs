@@ -3,6 +3,7 @@ compile_error!("Features `worker` and `server` are mutually exclusive. Enable on
 
 pub mod auth;
 pub mod cache;
+pub mod cookies;
 pub mod db;
 pub mod error;
 pub mod fmt;
@@ -42,6 +43,8 @@ pub struct AppContext<'a> {
     pub jwt_secret: &'a [u8],
     pub google_client_id: Option<&'a str>,
     pub apple_app_id: Option<&'a str>,
+    pub github_client_id: Option<&'a str>,
+    pub github_client_secret: Option<&'a str>,
     pub stateful_sessions: bool,
     pub test_bypass_secret: Option<&'a str>,
 }

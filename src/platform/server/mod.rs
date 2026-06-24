@@ -15,6 +15,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
+    cookies,
     router::{parse_query_string, AppRequest, AppResponse, AppRouter},
     types::GitHubUser,
     ApiError, AppContext, Result,
@@ -33,7 +34,10 @@ pub struct AppState {
     pub jwt_secret: Vec<u8>,
     pub google_client_id: Option<String>,
     pub apple_app_id: Option<String>,
+    pub github_client_id: Option<String>,
+    pub github_client_secret: Option<String>,
     pub test_bypass_secret: Option<String>,
+    pub cors_origin: Option<String>,
 }
 
 pub async fn build_app(
@@ -45,6 +49,9 @@ pub async fn build_app(
     jwt_secret: Vec<u8>,
     google_client_id: Option<String>,
     apple_app_id: Option<String>,
+    github_client_id: Option<String>,
+    github_client_secret: Option<String>,
+    cors_origin: Option<String>,
 ) -> Result<Router> {
     let db = Arc::new(SqliteDatabase::connect_and_migrate(database_url).await?);
     let http = Arc::new(ReqwestHttpClient::new()?);
@@ -60,20 +67,35 @@ pub async fn build_app(
         jwt_secret,
         google_client_id,
         apple_app_id,
+        github_client_id,
+        github_client_secret,
         test_bypass_secret: std::env::var("ATRIUM_TEST_BYPASS_SECRET")
             .or_else(|_| std::env::var("XTALK_TEST_BYPASS_SECRET"))
             .ok()
             .filter(|v| !v.trim().is_empty()),
+        cors_origin: cors_origin
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
     };
 
-    let app = Router::new().fallback(dispatch).with_state(state).layer(
-        CorsLayer::new()
-            .allow_methods(Any)
-            .allow_headers(Any)
-            .allow_origin(Any),
-    );
+    let cors = build_cors_layer(&state.cors_origin);
+    let app = Router::new()
+        .fallback(dispatch)
+        .with_state(state)
+        .layer(cors);
 
     Ok(app)
+}
+
+fn build_cors_layer(cors_origin: &Option<String>) -> CorsLayer {
+    let layer = CorsLayer::new().allow_methods(Any).allow_headers(Any);
+    if let Some(origin) = cors_origin {
+        if let Ok(value) = axum::http::HeaderValue::from_str(origin) {
+            return layer.allow_origin(value).allow_credentials(true);
+        }
+    }
+    layer.allow_origin(Any)
 }
 
 async fn dispatch(State(state): State<AppState>, req: HttpRequest<Body>) -> Response {
@@ -113,7 +135,14 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         body,
     };
 
-    let user = resolve_request_user(&app_req.path, app_req.auth_header.as_deref(), &state).await?;
+    let cookie_header = app_req.headers.get("cookie").cloned();
+    let user = resolve_request_user(
+        &app_req.path,
+        app_req.auth_header.as_deref(),
+        cookie_header.as_deref(),
+        &state,
+    )
+    .await?;
     let ctx = AppContext {
         db: state.db.as_ref(),
         http: state.http.as_ref(),
@@ -123,6 +152,8 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         jwt_secret: &state.jwt_secret,
         google_client_id: state.google_client_id.as_deref(),
         apple_app_id: state.apple_app_id.as_deref(),
+        github_client_id: state.github_client_id.as_deref(),
+        github_client_secret: state.github_client_secret.as_deref(),
         stateful_sessions: true,
         test_bypass_secret: state.test_bypass_secret.as_deref(),
     };
@@ -134,6 +165,7 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
 async fn resolve_request_user(
     path: &str,
     auth_header: Option<&str>,
+    cookie_header: Option<&str>,
     state: &AppState,
 ) -> Result<Option<GitHubUser>> {
     #[cfg(any(feature = "test-utils", feature = "worker"))]
@@ -151,7 +183,23 @@ async fn resolve_request_user(
     }
 
     if path.starts_with("/api/v1/") {
-        return resolve_xtalk_jwt_user(state.db.as_ref(), auth_header, &state.jwt_secret).await;
+        if let Some(user) =
+            resolve_xtalk_jwt_user(state.db.as_ref(), auth_header, &state.jwt_secret).await?
+        {
+            return Ok(Some(user));
+        }
+        if let Some(cookie_header) = cookie_header {
+            if let Some(access) = cookies::cookie_value(cookie_header, cookies::ACCESS_COOKIE) {
+                let synthetic = format!("Bearer {}", access);
+                return resolve_xtalk_jwt_user(
+                    state.db.as_ref(),
+                    Some(&synthetic),
+                    &state.jwt_secret,
+                )
+                .await;
+            }
+        }
+        return Ok(None);
     }
 
     let token = bearer_from_header(auth_header)?;
@@ -207,6 +255,7 @@ mod tests {
     use crate::{
         auth::hash_token,
         db::{Database, DbValue},
+        types::GitHubUser, AppContext,
     };
 
     async fn make_db() -> (tempfile::TempPath, Arc<SqliteDatabase>) {
@@ -233,7 +282,10 @@ mod tests {
             jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
             test_bypass_secret: None,
+            cors_origin: None,
         };
         (db_file, state)
     }
@@ -269,11 +321,75 @@ mod tests {
             .await
             .expect("insert token cache");
 
-        let user = resolve_request_user("/repos/o/r/issues", Some("Bearer gh-token"), &state)
-            .await
-            .expect("resolve user")
-            .expect("has user");
+        let user =
+            resolve_request_user("/repos/o/r/issues", Some("Bearer gh-token"), None, &state)
+                .await
+                .expect("resolve user")
+                .expect("has user");
         assert_eq!(user.login, "alice");
+    }
+
+    #[tokio::test]
+    async fn resolve_request_user_falls_back_to_access_cookie() {
+        let (_db_file, state) = make_state().await;
+        // Insert a user and issue a real JWT for it.
+        state
+            .db
+            .execute(
+                "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES \
+                 (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+                &[
+                    DbValue::Integer(88),
+                    DbValue::Text("cookieuser".to_string()),
+                    DbValue::Text("cu@test.com".to_string()),
+                    DbValue::Text("https://avatars/cu".to_string()),
+                    DbValue::Text("User".to_string()),
+                    DbValue::Integer(0),
+                ],
+            )
+            .await
+            .expect("insert user");
+
+        let user = GitHubUser {
+            id: 88,
+            login: "cookieuser".to_string(),
+            email: "cu@test.com".to_string(),
+            avatar_url: "https://avatars/cu".to_string(),
+            r#type: "User".to_string(),
+            site_admin: false,
+        };
+        let ctx = AppContext {
+            db: state.db.as_ref(),
+            http: state.http.as_ref(),
+            comment_cache: None,
+            base_url: "http://localhost",
+            user: None,
+            jwt_secret: &state.jwt_secret,
+            google_client_id: None,
+            apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
+            stateful_sessions: false,
+            test_bypass_secret: None,
+        };
+        let tokens = crate::services::auth::issue_xtalk_jwt(&ctx, &user)
+            .await
+            .expect("issue jwt");
+
+        let cookie_header = format!("atrium_access={}", tokens.access_token);
+        let resolved =
+            resolve_request_user("/api/v1/repos/o/r/threads", None, Some(&cookie_header), &state)
+                .await
+                .expect("resolve user")
+                .expect("has user");
+        assert_eq!(resolved.login, "cookieuser");
+
+        // No auth header and no cookie → None.
+        let none =
+            resolve_request_user("/api/v1/repos/o/r/threads", None, None, &state)
+                .await
+                .expect("resolve none");
+        assert!(none.is_none());
     }
 
     #[tokio::test]

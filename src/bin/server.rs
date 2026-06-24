@@ -10,6 +10,9 @@ struct ServerConfig {
     jwt_secret: Vec<u8>,
     google_client_id: Option<String>,
     apple_app_id: Option<String>,
+    github_client_id: Option<String>,
+    github_client_secret: Option<String>,
+    cors_origin: Option<String>,
 }
 
 #[tokio::main]
@@ -27,6 +30,9 @@ async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
         config.jwt_secret,
         config.google_client_id,
         config.apple_app_id,
+        config.github_client_id,
+        config.github_client_secret,
+        config.cors_origin,
     )
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;
@@ -65,6 +71,15 @@ fn load_config_from_env() -> Result<ServerConfig, io::Error> {
         google_client_id: env_with_fallback("ATRIUM_GOOGLE_CLIENT_ID", "XTALK_GOOGLE_CLIENT_ID")
             .filter(|v| !v.trim().is_empty()),
         apple_app_id: env_with_fallback("ATRIUM_APPLE_APP_ID", "XTALK_APPLE_APP_ID")
+            .filter(|v| !v.trim().is_empty()),
+        github_client_id: env_with_fallback("ATRIUM_GITHUB_CLIENT_ID", "XTALK_GITHUB_CLIENT_ID")
+            .filter(|v| !v.trim().is_empty()),
+        github_client_secret: env_with_fallback(
+            "ATRIUM_GITHUB_CLIENT_SECRET",
+            "XTALK_GITHUB_CLIENT_SECRET",
+        )
+        .filter(|v| !v.trim().is_empty()),
+        cors_origin: env_with_fallback("ATRIUM_CORS_ORIGIN", "XTALK_CORS_ORIGIN")
             .filter(|v| !v.trim().is_empty()),
     })
 }
@@ -110,6 +125,9 @@ mod tests {
             "ATRIUM_JWT_SECRET",
             "ATRIUM_GOOGLE_CLIENT_ID",
             "ATRIUM_APPLE_APP_ID",
+            "ATRIUM_CORS_ORIGIN",
+            "ATRIUM_GITHUB_CLIENT_ID",
+            "ATRIUM_GITHUB_CLIENT_SECRET",
             "ATRIUM_TEST_BYPASS_SECRET",
             "XTALK_BASE_URL",
             "XTALK_DATABASE_URL",
@@ -120,6 +138,9 @@ mod tests {
             "XTALK_JWT_SECRET",
             "XTALK_GOOGLE_CLIENT_ID",
             "XTALK_APPLE_APP_ID",
+            "XTALK_CORS_ORIGIN",
+            "XTALK_GITHUB_CLIENT_ID",
+            "XTALK_GITHUB_CLIENT_SECRET",
             "XTALK_TEST_BYPASS_SECRET",
         ] {
             remove_env_var(key);
@@ -178,6 +199,9 @@ mod tests {
         assert_eq!(cfg.jwt_secret, b"atrium-default-jwt-secret".to_vec());
         assert_eq!(cfg.google_client_id, None);
         assert_eq!(cfg.apple_app_id, None);
+        assert_eq!(cfg.github_client_id, None);
+        assert_eq!(cfg.github_client_secret, None);
+        assert_eq!(cfg.cors_origin, None);
     }
 
     #[test]
@@ -237,6 +261,9 @@ mod tests {
             jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
+            cors_origin: None,
         };
 
         let err = run(cfg).await.err().expect("invalid listen must fail");
@@ -256,6 +283,9 @@ mod tests {
             jwt_secret: b"test-jwt-secret-at-least-32-bytes!!".to_vec(),
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
+            cors_origin: None,
         };
 
         let timed = tokio::time::timeout(Duration::from_millis(120), run(cfg)).await;

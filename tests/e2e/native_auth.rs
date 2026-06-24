@@ -107,3 +107,16 @@ async fn native_auth_refresh_and_session_delete_require_valid_token() {
         .unwrap();
     assert_eq!(delete_no_token.status(), 401);
 }
+
+#[tokio::test]
+async fn native_auth_github_oauth_authorize_returns_501_when_not_configured() {
+    let app = TestApp::start().await;
+
+    let resp = app
+        .as_anon()
+        .get(&app.url("/api/v1/auth/github/authorize?redirect_uri=https://app.example/cb"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 501);
+}

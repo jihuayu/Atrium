@@ -131,6 +131,61 @@ impl HttpClient for ReqwestHttpClient {
         })
     }
 
+    async fn exchange_github_oauth_code(
+        &self,
+        code: &str,
+        client_id: &str,
+        client_secret: &str,
+        redirect_uri: &str,
+    ) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct TokenResponse {
+            access_token: Option<String>,
+            error: Option<String>,
+            error_description: Option<String>,
+        }
+
+        let response = self
+            .client
+            .post("https://github.com/login/oauth/access_token")
+            .header("Accept", "application/json")
+            .form(&[
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("code", code),
+                ("redirect_uri", redirect_uri),
+            ])
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("github oauth exchange failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(ApiError::new(
+                response.status().as_u16(),
+                format!("GitHub OAuth token exchange failed: {}", response.status()),
+            ));
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| ApiError::internal(format!("decode github oauth response failed: {}", e)))?;
+
+        if let Some(error) = token_response.error {
+            let message = token_response
+                .error_description
+                .unwrap_or(error.clone());
+            return Err(ApiError::bad_request(&format!(
+                "GitHub OAuth error: {}",
+                message
+            )));
+        }
+
+        token_response
+            .access_token
+            .ok_or_else(|| ApiError::internal("GitHub OAuth response missing access_token"))
+    }
+
     async fn get_jwks(&self, url: &str) -> Result<UpstreamResponse> {
         let response = self
             .client

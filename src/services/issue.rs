@@ -35,6 +35,7 @@ struct IssueRow {
     repo_name: String,
     owner_user_id: Option<i64>,
     admin_user_id: Option<i64>,
+    slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,10 +71,15 @@ pub async fn create_issue(
 
     let issue_number = counter.issue_counter;
 
+    let slug = input.slug.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    if let Some(slug) = slug {
+        ensure_slug_available(ctx, repo.id, slug).await?;
+    }
+
     ctx.db
         .execute(
-            "INSERT INTO issues (repo_id, number, title, body, state, locked, user_id, comment_count, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, 'open', 0, ?5, 0, datetime('now'), datetime('now'))",
+            "INSERT INTO issues (repo_id, number, title, body, state, locked, user_id, comment_count, created_at, updated_at, slug) \
+             VALUES (?1, ?2, ?3, ?4, 'open', 0, ?5, 0, datetime('now'), datetime('now'), ?6)",
             &[
                 DbValue::Integer(repo.id),
                 DbValue::Integer(issue_number),
@@ -84,6 +90,8 @@ pub async fn create_issue(
                     .map(|v| DbValue::Text(v.clone()))
                     .unwrap_or(DbValue::Null),
                 DbValue::Integer(user.id),
+                slug.map(|v| DbValue::Text(v.to_string()))
+                    .unwrap_or(DbValue::Null),
             ],
         )
         .await?;
@@ -201,7 +209,7 @@ pub async fn list_issues(
         "SELECT \
             i.id, i.number, i.title, i.body, i.state, i.locked, i.user_id, i.comment_count, i.created_at, i.updated_at, i.closed_at, \
             u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
-            r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id \
+            r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id, i.slug \
          FROM issues i \
          JOIN users u ON u.id = i.user_id \
          JOIN repos r ON r.id = i.repo_id \
@@ -334,7 +342,7 @@ async fn fetch_issue_row(
             "SELECT \
                 i.id, i.number, i.title, i.body, i.state, i.locked, i.user_id, i.comment_count, i.created_at, i.updated_at, i.closed_at, \
                 u.login, u.avatar_url, u.type AS user_type, u.site_admin, \
-                r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id \
+                r.id AS repo_id, r.owner AS repo_owner, r.name AS repo_name, r.owner_user_id, r.admin_user_id, i.slug \
              FROM issues i \
              JOIN users u ON u.id = i.user_id \
              JOIN repos r ON r.id = i.repo_id \
@@ -345,6 +353,28 @@ async fn fetch_issue_row(
             ],
         )
     .await
+}
+
+async fn ensure_slug_available(
+    ctx: &AppContext<'_>,
+    repo_id: i64,
+    slug: &str,
+) -> Result<()> {
+    #[derive(Debug, Deserialize)]
+    struct HitRow {
+        #[serde(rename = "hit")]
+        _hit: i64,
+    }
+    let hit = db::query_opt::<HitRow>(
+        ctx.db,
+        "SELECT 1 AS hit FROM issues WHERE repo_id = ?1 AND slug = ?2 AND deleted_at IS NULL LIMIT 1",
+        &[DbValue::Integer(repo_id), DbValue::Text(slug.to_string())],
+    )
+    .await?;
+    if hit.is_some() {
+        return Err(ApiError::new(409, "Thread slug already exists in this repo"));
+    }
+    Ok(())
 }
 
 async fn issue_labels(ctx: &AppContext<'_>, issue_id: i64) -> Result<Vec<Label>> {
@@ -405,6 +435,7 @@ async fn build_issue_response(ctx: &AppContext<'_>, row: &IssueRow) -> Result<Is
         node_id: issue_fmt::issue_node_id(row.id),
         number: row.number,
         title: row.title.clone(),
+        slug: row.slug.clone(),
         body: Some(body.clone()),
         body_html: Some(render_markdown(&body)),
         state: row.state.clone(),

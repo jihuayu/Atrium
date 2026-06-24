@@ -78,6 +78,8 @@ pub struct IssueResponse {
     pub number: i64,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_html: Option<String>,
@@ -127,6 +129,8 @@ pub struct CreateIssueInput {
     pub title: String,
     pub body: Option<String>,
     pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -290,6 +294,8 @@ pub struct NativeThreadResponse {
     pub id: i64,
     pub number: i64,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     pub body: String,
     pub body_html: String,
     pub state: String,
@@ -369,6 +375,8 @@ pub struct NativeListQuery {
     pub limit: Option<i64>,
     pub cursor: Option<String>,
     pub direction: Option<String>,
+    pub slug: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

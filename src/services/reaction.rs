@@ -421,6 +421,8 @@ mod tests {
             jwt_secret: b"test-jwt-secret-at-least-32-bytes!!",
             google_client_id: None,
             apple_app_id: None,
+            github_client_id: None,
+            github_client_secret: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         }
