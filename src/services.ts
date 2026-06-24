@@ -825,7 +825,7 @@ function listLimit(query: URLSearchParams): number {
 
 function normalizeKey(value: unknown, resource: string, field: string): string {
   const key = String(value ?? "").trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_-]{1,127}$/.test(key)) throw ApiError.validation(resource, field, "invalid");
+  if (!/^[a-z0-9][a-z0-9_.-]{1,127}$/.test(key)) throw ApiError.validation(resource, field, "invalid");
   return key;
 }
 

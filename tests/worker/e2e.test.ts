@@ -84,7 +84,7 @@ describe("Atrium native Worker API", () => {
     expect((await owner.post("/api/v1/websites", { key: "nope", name: "Nope" })).status).toBe(403);
 
     const created = await superAdmin.post("/api/v1/websites", {
-      key: "admin-blog",
+      key: "admin.blog.example.com",
       name: "Blog",
       origins: ["https://blog.example.com"],
       admin_user_ids: [2]
@@ -92,20 +92,20 @@ describe("Atrium native Worker API", () => {
     expect(created.status).toBe(201);
     expect((await json(created)).origins).toEqual(["https://blog.example.com"]);
 
-    const patched = await owner.patch("/api/v1/websites/admin-blog", {
+    const patched = await owner.patch("/api/v1/websites/admin.blog.example.com", {
       name: "Blog Updated",
       origins: ["https://blog.example.com", "https://www.blog.example.com"]
     });
     expect(patched.status).toBe(200);
     expect((await json(patched)).name).toBe("Blog Updated");
 
-    const admins = await owner.get("/api/v1/websites/admin-blog/admins");
+    const admins = await owner.get("/api/v1/websites/admin.blog.example.com/admins");
     expect(admins.status).toBe(200);
     expect((await json(admins)).data.map((entry: any) => entry.user.id)).toContain(2);
 
-    expect((await owner.delete("/api/v1/websites/admin-blog/admins/1")).status).toBe(204);
-    expect((await owner.delete("/api/v1/websites/admin-blog/admins/2")).status).toBe(403);
-    expect((await superAdmin.post("/api/v1/websites/admin-blog/admins", { user_id: 1 })).status).toBe(201);
+    expect((await owner.delete("/api/v1/websites/admin.blog.example.com/admins/1")).status).toBe(204);
+    expect((await owner.delete("/api/v1/websites/admin.blog.example.com/admins/2")).status).toBe(403);
+    expect((await superAdmin.post("/api/v1/websites/admin.blog.example.com/admins", { user_id: 1 })).status).toBe(201);
   });
 
   test("explicit page, comments, replies, reactions, moderation, and bans", async () => {
