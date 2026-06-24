@@ -1,4 +1,5 @@
 import { introspectAccountCookie } from "./account-auth";
+import { discoverOriginMetadata, discoveryPublicKeyResponse, type DiscoveryFailure, type DiscoveryMetadata } from "./discovery";
 import { ApiError } from "./error";
 import type { AppContext, AuthUser, PageRow, ReactionCounts, WebsiteRow } from "./types";
 import { EMPTY_REACTION_COUNTS } from "./types";
@@ -72,6 +73,7 @@ export async function upsertAuthUser(ctx: AppContext, user: AuthUser): Promise<v
       [user.id, user.account_sub, user.email, user.avatar_url]
     );
   }
+  await claimPendingWebsiteAdmins(ctx, user);
 }
 
 export async function resolveAtriumJwtUser(ctx: AppContext, token: string): Promise<AuthUser> {
@@ -152,7 +154,11 @@ async function resolveOrCreateProviderUser(
     "SELECT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.provider = ?1 AND ui.provider_user_id = ?2",
     [providerUser.provider, providerUser.provider_user_id]
   );
-  if (identity) return userFromRow(identity, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
+  if (identity) {
+    const user = userFromRow(identity, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
+    await claimPendingWebsiteAdmins(ctx, user);
+    return user;
+  }
 
   let userId: number | null = null;
   if (providerUser.email && !providerUser.email.endsWith("privaterelay.appleid.com")) {
@@ -175,7 +181,9 @@ async function resolveOrCreateProviderUser(
   );
   const row = await ctx.db.first<UserRow>("SELECT id, login, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.internal("failed to load user");
-  return userFromRow(row, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
+  const user = userFromRow(row, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
+  await claimPendingWebsiteAdmins(ctx, user);
+  return user;
 }
 
 async function allocateLogin(ctx: AppContext, preferred: string): Promise<string> {
@@ -294,6 +302,10 @@ export async function getWebsiteResponse(ctx: AppContext, websiteKey: string) {
   return websiteResponse(ctx, await getWebsite(ctx, websiteKey));
 }
 
+export async function getDiscoveryPublicKey(ctx: AppContext) {
+  return discoveryPublicKeyResponse(ctx);
+}
+
 export async function updateWebsite(ctx: AppContext, websiteKey: string, input: any) {
   const website = await requireWebsiteAdminOrSuperAdmin(ctx, websiteKey);
   const sets: string[] = [];
@@ -349,6 +361,51 @@ async function addWebsiteAdmin(ctx: AppContext, websiteId: number, userId: numbe
     "INSERT INTO website_admins (website_id, user_id, created_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(website_id, user_id) DO NOTHING",
     [websiteId, userId]
   );
+}
+
+async function savePendingWebsiteAdmins(ctx: AppContext, websiteId: number, emails: string[], source: string): Promise<void> {
+  for (const email of emails) {
+    await ctx.db.execute(
+      "INSERT INTO website_pending_admins (website_id, email, source, created_at) VALUES (?1, ?2, ?3, datetime('now')) ON CONFLICT(website_id, email) DO NOTHING",
+      [websiteId, email, source]
+    );
+  }
+}
+
+async function claimPendingWebsiteAdmins(ctx: AppContext, user: AuthUser): Promise<void> {
+  const email = normalizeClaimEmail(user.email);
+  if (!email) return;
+  const rows = await ctx.db.all<{ website_id: number }>(
+    "SELECT website_id FROM website_pending_admins WHERE email = ?1 AND claimed_at IS NULL ORDER BY website_id ASC",
+    [email]
+  );
+  for (const row of rows) {
+    await addWebsiteAdmin(ctx, row.website_id, user.id);
+    await ctx.db.execute(
+      "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
+      [user.id, row.website_id, email]
+    );
+  }
+}
+
+async function claimPendingWebsiteAdminsForWebsite(ctx: AppContext, websiteId: number): Promise<void> {
+  const rows = await ctx.db.all<{ email: string; user_id: number }>(
+    "SELECT wpa.email, u.id AS user_id FROM website_pending_admins wpa JOIN users u ON lower(u.email) = wpa.email WHERE wpa.website_id = ?1 AND wpa.claimed_at IS NULL ORDER BY u.id ASC",
+    [websiteId]
+  );
+  for (const row of rows) {
+    await addWebsiteAdmin(ctx, websiteId, row.user_id);
+    await ctx.db.execute(
+      "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
+      [row.user_id, websiteId, row.email]
+    );
+  }
+}
+
+function normalizeClaimEmail(raw: string | null | undefined): string | null {
+  const email = String(raw ?? "").trim().toLowerCase();
+  if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return null;
+  return email;
 }
 
 async function replaceWebsiteOrigins(ctx: AppContext, websiteId: number, rawOrigins: unknown): Promise<void> {
@@ -608,8 +665,94 @@ export async function resolveWebsiteByReferer(ctx: AppContext, referer: string):
     "SELECT w.id, w.key, w.name, w.created_at, w.updated_at FROM website_origins wo JOIN websites w ON w.id = wo.website_id WHERE wo.origin = ?1 LIMIT 1",
     [origin]
   );
-  if (!row) throw new ApiError(404, "website_not_found");
-  return { website: row, normalizedUrl };
+  if (row) return { website: row, normalizedUrl };
+
+  const discovered = await discoverWebsiteForOrigin(ctx, origin);
+  if (!discovered) throw new ApiError(404, "website_not_found");
+  return { website: discovered, normalizedUrl };
+}
+
+async function discoverWebsiteForOrigin(ctx: AppContext, origin: string): Promise<WebsiteRow | null> {
+  if (await hasFreshDiscoveryFailure(ctx, origin)) return null;
+
+  const lookup = await discoverOriginMetadata(ctx, origin);
+  if (!lookup.metadata) {
+    await recordDiscoveryFailure(ctx, origin, lookup.failure);
+    return null;
+  }
+  if (lookup.metadata.adminEmails.length === 0) {
+    await recordDiscoveryFailure(ctx, origin, {
+      status: "invalid",
+      source: lookup.metadata.source,
+      error: "admin_emails is required"
+    });
+    return null;
+  }
+
+  const website = await createDiscoveredWebsite(ctx, lookup.metadata);
+  if (!website) {
+    await recordDiscoveryFailure(ctx, origin, {
+      status: "conflict",
+      source: lookup.metadata.source,
+      error: "website_key already exists for another origin"
+    });
+    return null;
+  }
+  await recordDiscoverySuccess(ctx, origin, website.id, lookup.metadata.source);
+  return website;
+}
+
+async function createDiscoveredWebsite(ctx: AppContext, metadata: DiscoveryMetadata): Promise<WebsiteRow | null> {
+  const byOrigin = await ctx.db.first<WebsiteRow>(
+    "SELECT w.id, w.key, w.name, w.created_at, w.updated_at FROM website_origins wo JOIN websites w ON w.id = wo.website_id WHERE wo.origin = ?1 LIMIT 1",
+    [metadata.origin]
+  );
+  if (byOrigin) return byOrigin;
+
+  const existing = await findWebsite(ctx, metadata.websiteKey);
+  if (existing) return null;
+
+  await ctx.db.execute("INSERT INTO websites (key, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now'))", [
+    metadata.websiteKey,
+    metadata.name
+  ]);
+  const website = await getWebsite(ctx, metadata.websiteKey);
+  await ctx.db.execute("INSERT INTO website_origins (website_id, origin, created_at) VALUES (?1, ?2, datetime('now'))", [
+    website.id,
+    metadata.origin
+  ]);
+  await savePendingWebsiteAdmins(ctx, website.id, metadata.adminEmails, metadata.source);
+  await claimPendingWebsiteAdminsForWebsite(ctx, website.id);
+  return await getWebsite(ctx, metadata.websiteKey);
+}
+
+async function hasFreshDiscoveryFailure(ctx: AppContext, origin: string): Promise<boolean> {
+  const row = await ctx.db.first<{ status: string }>(
+    "SELECT status FROM website_discovery_cache WHERE origin = ?1 AND status != 'discovered' AND retry_after IS NOT NULL AND retry_after > datetime('now') LIMIT 1",
+    [origin]
+  );
+  return !!row;
+}
+
+async function recordDiscoveryFailure(ctx: AppContext, origin: string, failure: DiscoveryFailure): Promise<void> {
+  const retryAfter = discoveryRetryModifier(failure.status);
+  await ctx.db.execute(
+    "INSERT INTO website_discovery_cache (origin, status, website_id, error, source, checked_at, retry_after) VALUES (?1, ?2, NULL, ?3, ?4, datetime('now'), datetime('now', ?5)) ON CONFLICT(origin) DO UPDATE SET status = excluded.status, website_id = NULL, error = excluded.error, source = excluded.source, checked_at = datetime('now'), retry_after = excluded.retry_after",
+    [origin, failure.status, failure.error, failure.source, retryAfter]
+  );
+}
+
+async function recordDiscoverySuccess(ctx: AppContext, origin: string, websiteId: number, source: string): Promise<void> {
+  await ctx.db.execute(
+    "INSERT INTO website_discovery_cache (origin, status, website_id, error, source, checked_at, retry_after) VALUES (?1, 'discovered', ?2, NULL, ?3, datetime('now'), NULL) ON CONFLICT(origin) DO UPDATE SET status = 'discovered', website_id = excluded.website_id, error = NULL, source = excluded.source, checked_at = datetime('now'), retry_after = NULL",
+    [origin, websiteId, source]
+  );
+}
+
+function discoveryRetryModifier(status: string): string {
+  if (status === "not_found") return "+6 hours";
+  if (status === "error") return "+10 minutes";
+  return "+1 hour";
 }
 
 export function normalizePageUrl(raw: string): string {

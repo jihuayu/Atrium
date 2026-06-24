@@ -67,7 +67,24 @@ describe("Atrium native Worker API", () => {
   test("root and removed GitHub-compatible routes", async () => {
     const root = await anon.get("/");
     expect(root.status).toBe(200);
-    expect(await root.text()).toContain("website/page/comment");
+    const rootText = await root.text();
+    expect(rootText).toContain("website/page/comment");
+    expect(rootText).toContain("站点接入");
+    expect(rootText).toContain("/docs/discovery");
+    expect(rootText).toContain("_atrium.<host> TXT");
+
+    const discoveryKey = await anon.get("/api/v1/discovery/public-key");
+    expect(discoveryKey.status).toBe(200);
+    expect((await json(discoveryKey)).alg).toBe("RSA-OAEP-256");
+
+    const guide = await anon.get("/docs/discovery");
+    expect(guide.status).toBe(200);
+    expect(guide.headers.get("Content-Type")).toContain("text/html");
+    const guideHtml = await guide.text();
+    expect(guideHtml).toContain("Atrium Discovery 接入指南");
+    expect(guideHtml).toContain("/.well-known/atrium.json");
+    expect(guideHtml).toContain("_atrium.blog.example.com TXT");
+    expect(guideHtml).toContain("/api/v1/discovery/public-key");
 
     expect((await anon.get("/repos/e2e/repo/issues")).status).toBe(404);
     expect((await anon.post("/repos/e2e/repo/issues", { title: "old" })).status).toBe(404);
@@ -204,4 +221,50 @@ describe("Atrium native Worker API", () => {
     expect((await alice.put(`/api/v1/comments/current/${quickCommentId}/reactions/heart`, undefined, { Referer: referer })).status).toBe(403);
     expect((await anon.get("/api/v1/comments/current", { Referer: referer })).status).toBe(200);
   });
+
+  test("quick Referer mode discovers unknown origins from well-known metadata", async () => {
+    await ensureUsers();
+
+    await expectDiscoveredWebsite("https://discover-file.example.com", "discover-file.example.com");
+    await expectDiscoveredWebsite("https://discover-file-encrypted.example.com", "discover-file-encrypted.example.com");
+  });
+
+  test("quick Referer mode discovers unknown origins from DNS TXT metadata", async () => {
+    await ensureUsers();
+
+    await expectDiscoveredWebsite("https://discover-dns.example.com", "discover-dns.example.com");
+    await expectDiscoveredWebsite("https://discover-dns-encrypted.example.com", "discover-dns-encrypted.example.com");
+  });
+
+  test("discovery rejects unsafe or conflicting metadata", async () => {
+    await ensureUsers();
+    await createWebsite("existing-key", "https://registered-key.example.com");
+
+    const cases = [
+      "https://discover-mismatch.example.com/post",
+      "https://discover-bad-jwe.example.com/post",
+      "https://discover-wrong-type.example.com/post",
+      "https://discover-conflict.example.com/post"
+    ];
+
+    for (const referer of cases) {
+      const response = await anon.get("/api/v1/comments/current", { Referer: referer });
+      expect(response.status).toBe(404);
+      expect((await json(response)).message).toBe("website_not_found");
+    }
+  });
 });
+
+async function expectDiscoveredWebsite(origin: string, websiteKey: string) {
+  const referer = `${origin}/post?z=9&a=1#comments`;
+  const response = await anon.get("/api/v1/comments/current?page_title=Discovered", { Referer: referer });
+  expect(response.status).toBe(200);
+  const body = await json(response);
+  expect(body.website.key).toBe(websiteKey);
+  expect(body.website.origins).toEqual([origin]);
+  expect(body.page.normalized_url).toBe(`${origin}/post?a=1&z=9`);
+
+  const admins = await owner.get(`/api/v1/websites/${websiteKey}/admins`);
+  expect(admins.status).toBe(200);
+  expect((await json(admins)).data.map((entry: any) => entry.user.email)).toContain("owner@test.com");
+}

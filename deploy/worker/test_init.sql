@@ -124,6 +124,26 @@ CREATE TABLE IF NOT EXISTS website_bans (
     PRIMARY KEY (website_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS website_pending_admins (
+    website_id      INTEGER NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+    email           TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'discovery',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    claimed_at      TEXT,
+    claimed_user_id INTEGER REFERENCES users(id),
+    PRIMARY KEY (website_id, email)
+);
+
+CREATE TABLE IF NOT EXISTS website_discovery_cache (
+    origin      TEXT PRIMARY KEY,
+    status      TEXT NOT NULL CHECK(status IN ('not_found','invalid','error','conflict','discovered')),
+    website_id  INTEGER REFERENCES websites(id) ON DELETE SET NULL,
+    error       TEXT,
+    source      TEXT,
+    checked_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    retry_after TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_website_admins_user ON website_admins(user_id);
 CREATE INDEX IF NOT EXISTS idx_pages_website_key ON pages(website_id, key);
 CREATE INDEX IF NOT EXISTS idx_pages_website_updated ON pages(website_id, updated_at);
@@ -131,3 +151,5 @@ CREATE INDEX IF NOT EXISTS idx_comments_page_parent ON comments(page_id, parent_
 CREATE INDEX IF NOT EXISTS idx_comments_website_user ON comments(website_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment ON comment_reactions(comment_id);
 CREATE INDEX IF NOT EXISTS idx_website_bans_user ON website_bans(user_id, unbanned_at);
+CREATE INDEX IF NOT EXISTS idx_website_pending_admins_email ON website_pending_admins(email, claimed_at);
+CREATE INDEX IF NOT EXISTS idx_website_discovery_cache_retry ON website_discovery_cache(retry_after);

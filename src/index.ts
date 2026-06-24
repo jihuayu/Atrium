@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { accountLoginLocation, redirectWithUserState } from "./account-auth";
 import { Database } from "./db";
+import { renderDiscoveryGuide } from "./discovery-guide";
 import { ApiError, asApiError } from "./error";
 import * as svc from "./services";
 import type { AppContext, AuthUser, Env } from "./types";
@@ -35,17 +36,27 @@ app.use("*", async (c, next) => {
   c.res = addCors(c.res);
 });
 
-app.get("/", () =>
+app.get("/", (c) =>
   textResponse(
     `Atrium - native website/page/comment service
 
+站点接入:
+  1. 阅读完整接入说明: ${c.get("ctx").baseUrl.replace(/\/+$/, "")}/docs/discovery
+  2. 在站点发布 https://<host>/.well-known/atrium.json，或添加 _atrium.<host> TXT
+  3. 明文或 enc:jwe: 加密字段都支持；加密公钥见 /api/v1/discovery/public-key
+  4. admin_emails 里的邮箱登录后会自动认领该 website admin 权限
+
 Native API:
+  GET    /docs/discovery
+
   POST   /api/v1/auth/account
   GET    /api/v1/auth/account/authorize
   GET    /api/v1/auth/account/callback
   POST   /api/v1/auth/refresh
   DELETE /api/v1/auth/session
   GET    /api/v1/auth/me
+
+  GET    /api/v1/discovery/public-key
 
   POST   /api/v1/websites
   GET    /api/v1/websites
@@ -78,6 +89,8 @@ Native API:
 `
   )
 );
+
+app.get("/docs/discovery", (c) => htmlResponse(renderDiscoveryGuide(c.get("ctx").baseUrl)));
 
 app.post("/api/v1/auth/account", (c) =>
   native(c, async (ctx) => {
@@ -124,6 +137,8 @@ app.get("/api/v1/auth/me", (c) =>
     return json({ user: toPublicUser(ctx.user, true), super_admin: await svc.isSuperAdmin(ctx) });
   })
 );
+
+app.get("/api/v1/discovery/public-key", (c) => native(c, async (ctx) => json(await svc.getDiscoveryPublicKey(ctx))));
 
 app.post("/api/v1/websites", (c) => native(c, async (ctx) => json(await svc.createWebsite(ctx, await bodyJson(c)), 201)));
 app.get("/api/v1/websites", (c) => native(c, async (ctx) => json(await svc.listWebsites(ctx, query(c)))));
@@ -268,6 +283,10 @@ function textResponse(payload: string, status = 200, headers?: HeadersInit): Res
   const h = new Headers(headers);
   if (!h.has("Content-Type")) h.set("Content-Type", "text/plain; charset=utf-8");
   return new Response(payload, { status, headers: h });
+}
+
+function htmlResponse(payload: string, status = 200): Response {
+  return new Response(payload, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
 function empty(): Response {

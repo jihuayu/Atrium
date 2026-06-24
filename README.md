@@ -26,6 +26,9 @@ Important environment variables:
 - `ACCOUNT_AUDIENCE`: account session introspection audience, default `atrium`
 - `ACCOUNT_INTERNAL_SECRET`: optional Worker secret sent as `x-internal-secret` to the account introspection endpoint
 - `ATRIUM_SUPER_ADMIN_ACCOUNT_IDS`: comma-separated Jihuayu Account `sub` values or email addresses that can create/configure all websites
+- `ATRIUM_DISCOVERY_PRIVATE_JWK`: Worker secret containing the RSA private JWK used to decrypt `enc:jwe:` discovery fields
+- `ATRIUM_DISCOVERY_PUBLIC_JWK`: public RSA JWK returned by the discovery public-key endpoint
+- `ATRIUM_DISCOVERY_KEY_ID`: key id expected in discovery JWE protected headers
 - `ATRIUM_TEST_BYPASS_SECRET`: local/CI-only HTTP test bypass secret
 
 Native login uses the parent-domain SSO cookie set by `account.jihuayu.com`:
@@ -65,7 +68,30 @@ For frontend widgets, quick mode resolves website and page from the HTTP `Refere
 - `GET /api/v1/comments/current/replies?comment_id=...`
 - `PUT|DELETE /api/v1/comments/current/{commentId}/reactions/{content}`
 
-Quick mode may auto-create/update the page for a matched website origin. It never creates websites implicitly.
+Quick mode may auto-create/update the page for a matched website origin. If the origin is unknown, Atrium attempts site discovery from `https://<host>/.well-known/atrium.json`, then from `_atrium.<host>` TXT records. Either source uses the same flat JSON metadata:
+
+```json
+{
+  "atrium": "v1",
+  "origin": "https://blog.example.com",
+  "website_key": "blog.example.com",
+  "name": "Blog",
+  "admin_emails": ["owner@example.com"],
+  "contact_email": "owner@example.com"
+}
+```
+
+Sensitive top-level fields may be replaced by `enc:jwe:<compact-jwe>`. The JWE uses `RSA-OAEP-256` and `A256GCM`, and the decrypted plaintext must be the original JSON value for that field. The current encryption key is exposed at:
+
+- `GET /api/v1/discovery/public-key`
+
+DNS TXT uses the same JSON payload with the `atrium-site=` prefix:
+
+```text
+_atrium.blog.example.com TXT "atrium-site={\"atrium\":\"v1\",\"origin\":\"https://blog.example.com\",\"website_key\":\"blog.example.com\",\"name\":\"Blog\",\"admin_emails\":[\"owner@example.com\"]}"
+```
+
+Discovery-created websites bind only the current `Referer` origin. If `website_key` already exists but the origin is not bound, Atrium does not merge it automatically and returns `website_not_found`.
 
 Website admins moderate comments and ban users within a website:
 
@@ -105,3 +131,11 @@ pnpm deploy
 ```
 
 Production uses the `atrium-db` D1 binding and the custom Worker domain `https://atrium.jihuayu.com`.
+
+## Integration Guide
+
+After deployment, site owners can read the discovery integration guide at:
+
+```text
+https://atrium.jihuayu.com/docs/discovery
+```
