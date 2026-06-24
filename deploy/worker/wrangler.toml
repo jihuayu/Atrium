@@ -3,18 +3,14 @@ main = "../../src/index.ts"
 compatibility_date = "2024-09-23"
 
 [[routes]]
-pattern = "xtalk.raw2.cc/*"
-zone_name = "raw2.cc"
-
-[[routes]]
-pattern = "atrium.raw2.cc/*"
-zone_name = "raw2.cc"
+pattern = "atrium.jihuayu.com"
+custom_domain = true
 
 [placement]
 mode = "smart"
 
 [vars]
-BASE_URL = "https://atrium.raw2.cc"
+BASE_URL = "https://atrium.jihuayu.com"
 TOKEN_CACHE_TTL = "3600"
 ACCOUNT_BASE_URL = "https://account.jihuayu.com"
 ACCOUNT_AUDIENCE = "atrium"
@@ -26,7 +22,7 @@ ACCOUNT_AUDIENCE = "atrium"
 [[d1_databases]]
 binding = "DB"
 database_name = "atrium-db"
-database_id = "f34f0fb2-dd07-49a2-8073-4bdaf3cb02e4"
+database_id = "fd908a31-1dc2-4e43-aca5-b55823aebeae"
 migrations_dir = "../../migrations"
 
 [observability]

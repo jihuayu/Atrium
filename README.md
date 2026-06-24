@@ -64,4 +64,7 @@ pnpm exec wrangler d1 migrations apply DB --config deploy/worker/wrangler.toml -
 pnpm deploy
 ```
 
-The Worker config keeps the existing production routes and D1 database binding.
+Production uses the `atrium-db` D1 binding and the custom Worker domain `https://atrium.jihuayu.com`.
+GitHub Actions deploys the Worker on every push to the `worker` branch, after typecheck,
+unit tests, and remote D1 migrations. The repository needs `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` GitHub Actions secrets for that workflow.
