@@ -223,7 +223,9 @@ describe("Atrium native Worker API", () => {
     expect((await owner.delete(`/api/v1/websites/explicit-blog/comments/${commentId}`)).status).toBe(204);
     const deletedRoots = await anon.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
     expect(deletedRoots.status).toBe(200);
-    const deletedRoot = (await json(deletedRoots)).data.find((item: any) => item.id === commentId);
+    const deletedRootsBody = await json(deletedRoots);
+    const deletedRootIds = deletedRootsBody.data.map((item: any) => item.id);
+    const deletedRoot = deletedRootsBody.data.find((item: any) => item.id === commentId);
     expect(deletedRoot).toMatchObject({
       id: commentId,
       body: "",
@@ -241,6 +243,7 @@ describe("Atrium native Worker API", () => {
         total: 0
       }
     });
+    expect(deletedRootIds).not.toContain(selfDeleteId);
     expect((await bob.put(`/api/v1/websites/explicit-blog/comments/${commentId}/reactions/eyes`)).status).toBe(404);
     expect((await bob.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "blocked child", parent_id: commentId })).status).toBe(404);
 
@@ -252,13 +255,8 @@ describe("Atrium native Worker API", () => {
     const flatAfterReplyDelete = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}&thread=flat`);
     expect(flatAfterReplyDelete.status).toBe(200);
     const flatAfterReplyDeleteBody = await json(flatAfterReplyDelete);
-    expect(flatAfterReplyDeleteBody.data.map((item: any) => item.id)).toEqual([replyId, nestedReplyId]);
-    expect(flatAfterReplyDeleteBody.data.find((item: any) => item.id === replyId)).toMatchObject({
-      id: replyId,
-      body: "",
-      body_html: "",
-      deleted: true
-    });
+    expect(flatAfterReplyDeleteBody.data.map((item: any) => item.id)).toEqual([nestedReplyId]);
+    expect(flatAfterReplyDeleteBody.data.find((item: any) => item.id === replyId)).toBeUndefined();
     const moderation = await owner.get("/api/v1/websites/explicit-blog/admin/comments?status=deleted&page_key=post-1");
     expect(moderation.status).toBe(200);
     expect((await json(moderation)).data.map((item: any) => item.id)).toEqual(expect.arrayContaining([commentId, replyId, selfDeleteId]));

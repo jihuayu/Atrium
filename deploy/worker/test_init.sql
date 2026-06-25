@@ -150,6 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_pages_website_key ON pages(website_id, key);
 CREATE INDEX IF NOT EXISTS idx_pages_website_updated ON pages(website_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_comments_page_parent ON comments(page_id, parent_comment_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_website_user ON comments(website_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_comments_website_page_parent_id ON comments(website_id, page_id, parent_comment_id, id);
+CREATE INDEX IF NOT EXISTS idx_comments_website_id ON comments(website_id, id);
 CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment ON comment_reactions(comment_id);
 CREATE INDEX IF NOT EXISTS idx_website_bans_user ON website_bans(user_id, unbanned_at);
 CREATE INDEX IF NOT EXISTS idx_website_pending_admins_email ON website_pending_admins(email, claimed_at);

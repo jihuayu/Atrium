@@ -21,6 +21,12 @@ import {
 
 const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray", "confused", "rocket", "eyes"]);
 const ACCOUNT_PROFILE_REFRESH_TTL_SECONDS = 24 * 60 * 60;
+const COMMENT_ROW_COLUMNS =
+  "c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin";
+const COMMENT_ROW_FROM =
+  "FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id";
+const PUBLIC_COMMENT_VISIBILITY_FILTER =
+  "(c.deleted_at IS NULL OR (c.parent_comment_id IS NULL AND EXISTS (SELECT 1 FROM comments child WHERE child.website_id = c.website_id AND child.page_id = c.page_id AND child.parent_comment_id = c.id)))";
 
 interface UserRow {
   id: number;
@@ -71,16 +77,19 @@ function userFromRow(row: UserRow, accountSub?: string): AuthUser {
 }
 
 export async function upsertAuthUser(ctx: AppContext, user: AuthUser): Promise<void> {
-  await ctx.db.execute(
-    "INSERT INTO users (id, login, display_name, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now')) ON CONFLICT(id) DO UPDATE SET login = excluded.login, display_name = excluded.display_name, email = excluded.email, avatar_url = excluded.avatar_url, type = excluded.type, cached_at = datetime('now')",
-    [user.id, user.login, user.display_name ?? user.login, user.email, user.avatar_url, user.type]
-  );
+  const stmts: Array<[string, any[]]> = [
+    [
+      "INSERT INTO users (id, login, display_name, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now')) ON CONFLICT(id) DO UPDATE SET login = excluded.login, display_name = excluded.display_name, email = excluded.email, avatar_url = excluded.avatar_url, type = excluded.type, cached_at = datetime('now')",
+      [user.id, user.login, user.display_name ?? user.login, user.email, user.avatar_url, user.type]
+    ]
+  ];
   if (user.account_sub) {
-    await ctx.db.execute(
+    stmts.push([
       "INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at) VALUES (?1, 'account', ?2, ?3, ?4, datetime('now')) ON CONFLICT(provider, provider_user_id) DO UPDATE SET user_id = excluded.user_id, email = excluded.email, avatar_url = excluded.avatar_url, cached_at = datetime('now')",
       [user.id, user.account_sub, user.email, user.avatar_url]
-    );
+    ]);
   }
+  await ctx.db.batch(stmts);
   await claimPendingWebsiteAdmins(ctx, user);
 }
 
@@ -258,10 +267,14 @@ async function allocateProviderLoginForUser(
 
 async function allocateLoginForUser(ctx: AppContext, preferred: string, currentUserId: number | null): Promise<string> {
   const base = slugify(preferred) || "user";
+  const rows = await ctx.db.all<{ id: number; login: string }>(
+    "SELECT id, login FROM users WHERE login = ?1 OR login GLOB ?2",
+    [base, `${base}-*`]
+  );
+  const used = new Set(rows.filter((row) => row.id !== currentUserId).map((row) => row.login));
   for (let i = 0; i < 1000; i += 1) {
     const candidate = i === 0 ? base : `${base}-${i}`;
-    const exists = await ctx.db.first<{ id: number }>("SELECT id FROM users WHERE login = ?1", [candidate]);
-    if (!exists || exists.id === currentUserId) return candidate;
+    if (!used.has(candidate)) return candidate;
   }
   throw ApiError.internal("unable to allocate login");
 }
@@ -344,14 +357,18 @@ export async function createWebsite(ctx: AppContext, input: any) {
   if (!name) throw ApiError.validation("Website", "name", "missing_field");
   const existing = await findWebsite(ctx, key);
   if (existing) throw new ApiError(409, "Website already exists");
-  await ctx.db.execute("INSERT INTO websites (key, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now'))", [key, name]);
-  const website = await getWebsite(ctx, key);
+  const website = await ctx.db.first<WebsiteRow>(
+    "INSERT INTO websites (key, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now')) RETURNING id, key, name, created_at, updated_at",
+    [key, name]
+  );
+  if (!website) throw ApiError.internal("failed to create website");
   await replaceWebsiteOrigins(ctx, website.id, input.origins);
-  await addWebsiteAdmin(ctx, website.id, actor.id);
+  const adminUserIds = [actor.id];
   if (Array.isArray(input.admin_user_ids)) {
-    for (const userId of input.admin_user_ids) await addWebsiteAdmin(ctx, website.id, Number(userId));
+    adminUserIds.push(...input.admin_user_ids.map((userId: unknown) => Number(userId)));
   }
-  return websiteResponse(ctx, await getWebsite(ctx, key));
+  await addWebsiteAdmins(ctx, website.id, adminUserIds);
+  return websiteResponse(ctx, website);
 }
 
 export async function listWebsites(ctx: AppContext, query: URLSearchParams) {
@@ -374,8 +391,7 @@ export async function listWebsites(ctx: AppContext, query: URLSearchParams) {
   );
   const hasMore = rows.length > limit;
   if (hasMore) rows.pop();
-  const data = [];
-  for (const row of rows) data.push(await websiteResponse(ctx, row));
+  const data = await websiteResponses(ctx, rows);
   return cursorPage(data, hasMore, rows.at(-1)?.id ?? null);
 }
 
@@ -408,9 +424,13 @@ export async function updateWebsite(ctx: AppContext, websiteKey: string, input: 
 
 export async function listWebsiteAdmins(ctx: AppContext, websiteKey: string) {
   const website = await requireWebsiteAdminOrSuperAdmin(ctx, websiteKey);
+  return websiteAdminsResponse(ctx, website.id);
+}
+
+async function websiteAdminsResponse(ctx: AppContext, websiteId: number) {
   const rows = await ctx.db.all<any>(
     "SELECT u.id, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin, wa.created_at FROM website_admins wa JOIN users u ON u.id = wa.user_id WHERE wa.website_id = ?1 ORDER BY wa.created_at ASC, u.id ASC",
-    [website.id]
+    [websiteId]
   );
   return {
     data: rows.map((row) => ({
@@ -425,7 +445,7 @@ export async function addWebsiteAdminByInput(ctx: AppContext, websiteKey: string
   const userId = Number(input.user_id);
   if (!Number.isFinite(userId)) throw ApiError.validation("WebsiteAdmin", "user_id", "invalid");
   await addWebsiteAdmin(ctx, website.id, userId);
-  return listWebsiteAdmins(ctx, websiteKey);
+  return websiteAdminsResponse(ctx, website.id);
 }
 
 export async function removeWebsiteAdmin(ctx: AppContext, websiteKey: string, userId: number): Promise<void> {
@@ -436,21 +456,34 @@ export async function removeWebsiteAdmin(ctx: AppContext, websiteKey: string, us
 }
 
 async function addWebsiteAdmin(ctx: AppContext, websiteId: number, userId: number): Promise<void> {
-  const user = await ctx.db.first<{ id: number }>("SELECT id FROM users WHERE id = ?1", [userId]);
-  if (!user) throw ApiError.validation("WebsiteAdmin", "user_id", "invalid");
-  await ctx.db.execute(
-    "INSERT INTO website_admins (website_id, user_id, created_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(website_id, user_id) DO NOTHING",
-    [websiteId, userId]
+  await addWebsiteAdmins(ctx, websiteId, [userId]);
+}
+
+async function addWebsiteAdmins(ctx: AppContext, websiteId: number, userIds: number[]): Promise<void> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.some((userId) => !Number.isFinite(userId))) throw ApiError.validation("WebsiteAdmin", "user_id", "invalid");
+  if (uniqueUserIds.length === 0) return;
+  const users = await ctx.db.all<{ id: number }>(
+    `SELECT id FROM users WHERE id IN (${placeholders(uniqueUserIds.length)})`,
+    uniqueUserIds
+  );
+  if (users.length !== uniqueUserIds.length) throw ApiError.validation("WebsiteAdmin", "user_id", "invalid");
+  await ctx.db.batch(
+    uniqueUserIds.map((userId) => [
+      "INSERT INTO website_admins (website_id, user_id, created_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(website_id, user_id) DO NOTHING",
+      [websiteId, userId]
+    ])
   );
 }
 
 async function savePendingWebsiteAdmins(ctx: AppContext, websiteId: number, emails: string[], source: string): Promise<void> {
-  for (const email of emails) {
-    await ctx.db.execute(
+  if (emails.length === 0) return;
+  await ctx.db.batch(
+    emails.map((email) => [
       "INSERT INTO website_pending_admins (website_id, email, source, created_at) VALUES (?1, ?2, ?3, datetime('now')) ON CONFLICT(website_id, email) DO NOTHING",
       [websiteId, email, source]
-    );
-  }
+    ])
+  );
 }
 
 async function claimPendingWebsiteAdmins(ctx: AppContext, user: AuthUser): Promise<void> {
@@ -460,13 +493,19 @@ async function claimPendingWebsiteAdmins(ctx: AppContext, user: AuthUser): Promi
     "SELECT website_id FROM website_pending_admins WHERE email = ?1 AND claimed_at IS NULL ORDER BY website_id ASC",
     [email]
   );
-  for (const row of rows) {
-    await addWebsiteAdmin(ctx, row.website_id, user.id);
-    await ctx.db.execute(
-      "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
-      [user.id, row.website_id, email]
-    );
-  }
+  if (rows.length === 0) return;
+  await ctx.db.batch(
+    rows.flatMap((row) => [
+      [
+        "INSERT INTO website_admins (website_id, user_id, created_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(website_id, user_id) DO NOTHING",
+        [row.website_id, user.id]
+      ],
+      [
+        "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
+        [user.id, row.website_id, email]
+      ]
+    ])
+  );
 }
 
 async function claimPendingWebsiteAdminsForWebsite(ctx: AppContext, websiteId: number): Promise<void> {
@@ -474,13 +513,19 @@ async function claimPendingWebsiteAdminsForWebsite(ctx: AppContext, websiteId: n
     "SELECT wpa.email, u.id AS user_id FROM website_pending_admins wpa JOIN users u ON lower(u.email) = wpa.email WHERE wpa.website_id = ?1 AND wpa.claimed_at IS NULL ORDER BY u.id ASC",
     [websiteId]
   );
-  for (const row of rows) {
-    await addWebsiteAdmin(ctx, websiteId, row.user_id);
-    await ctx.db.execute(
-      "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
-      [row.user_id, websiteId, row.email]
-    );
-  }
+  if (rows.length === 0) return;
+  await ctx.db.batch(
+    rows.flatMap((row) => [
+      [
+        "INSERT INTO website_admins (website_id, user_id, created_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(website_id, user_id) DO NOTHING",
+        [websiteId, row.user_id]
+      ],
+      [
+        "UPDATE website_pending_admins SET claimed_at = datetime('now'), claimed_user_id = ?1 WHERE website_id = ?2 AND email = ?3 AND claimed_at IS NULL",
+        [row.user_id, websiteId, row.email]
+      ]
+    ])
+  );
 }
 
 function normalizeClaimEmail(raw: string | null | undefined): string | null {
@@ -492,14 +537,15 @@ function normalizeClaimEmail(raw: string | null | undefined): string | null {
 async function replaceWebsiteOrigins(ctx: AppContext, websiteId: number, rawOrigins: unknown): Promise<void> {
   if (rawOrigins == null) return;
   if (!Array.isArray(rawOrigins)) throw ApiError.validation("Website", "origins", "invalid");
-  await ctx.db.execute("DELETE FROM website_origins WHERE website_id = ?1", [websiteId]);
+  const stmts: Array<[string, any[]]> = [["DELETE FROM website_origins WHERE website_id = ?1", [websiteId]]];
   const seen = new Set<string>();
   for (const rawOrigin of rawOrigins) {
     const origin = normalizeOrigin(String(rawOrigin ?? ""));
     if (!origin || seen.has(origin)) continue;
     seen.add(origin);
-    await ctx.db.execute("INSERT INTO website_origins (website_id, origin, created_at) VALUES (?1, ?2, datetime('now'))", [websiteId, origin]);
+    stmts.push(["INSERT INTO website_origins (website_id, origin, created_at) VALUES (?1, ?2, datetime('now'))", [websiteId, origin]]);
   }
+  await ctx.db.batch(stmts);
 }
 
 export async function upsertPage(ctx: AppContext, websiteKey: string, pageKey: string, input: any) {
@@ -532,6 +578,10 @@ export async function listPages(ctx: AppContext, websiteKey: string, query: URLS
 }
 
 async function upsertPageForWebsite(ctx: AppContext, website: WebsiteRow, pageKey: string, input: any) {
+  return pageResponse(await upsertPageRowForWebsite(ctx, website, pageKey, input), website);
+}
+
+async function upsertPageRowForWebsite(ctx: AppContext, website: WebsiteRow, pageKey: string, input: any): Promise<PageRow> {
   const key = normalizeKey(pageKey, "Page", "key");
   const rawUrl = String(input.url ?? "").trim();
   if (!rawUrl) throw ApiError.validation("Page", "url", "missing_field");
@@ -539,18 +589,23 @@ async function upsertPageForWebsite(ctx: AppContext, website: WebsiteRow, pageKe
   const title = String(input.title ?? normalizedUrl).trim();
   if (!title) throw ApiError.validation("Page", "title", "missing_field");
   const metadata = input.metadata == null ? null : JSON.stringify(input.metadata);
-  await ctx.db.execute(
-    "INSERT INTO pages (website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now')) ON CONFLICT(website_id, key) DO UPDATE SET title = excluded.title, url = excluded.url, normalized_url = excluded.normalized_url, metadata = excluded.metadata, updated_at = datetime('now')",
+  const row = await ctx.db.first<PageRow>(
+    "INSERT INTO pages (website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now')) ON CONFLICT(website_id, key) DO UPDATE SET title = excluded.title, url = excluded.url, normalized_url = excluded.normalized_url, metadata = excluded.metadata, updated_at = datetime('now') RETURNING id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at",
     [website.id, key, title, rawUrl, normalizedUrl, metadata]
   );
-  return pageResponse(await getPage(ctx, website.id, key), website);
+  if (!row) throw ApiError.internal("failed to upsert page");
+  return row;
 }
 
 export async function createPageComment(ctx: AppContext, websiteKey: string, pageKey: string, input: any) {
-  const actor = requireUser(ctx);
   const website = await getWebsite(ctx, websiteKey);
-  await requireNotWebsiteBanned(ctx, website.id);
   const page = await getPage(ctx, website.id, pageKey);
+  return createCommentForPage(ctx, website, page, input);
+}
+
+async function createCommentForPage(ctx: AppContext, website: WebsiteRow, page: PageRow, input: any) {
+  const actor = requireUser(ctx);
+  await requireNotWebsiteBanned(ctx, website.id);
   const body = String(input.body ?? "");
   if (!body.trim()) throw ApiError.validation("Comment", "body", "missing_field");
   const parentId = input.parent_id == null ? null : Number(input.parent_id);
@@ -597,8 +652,17 @@ export async function deleteComment(ctx: AppContext, websiteKey: string, comment
 }
 
 export async function setCommentReaction(ctx: AppContext, websiteKey: string, commentId: number, content: string): Promise<ReactionCounts> {
-  const actor = requireUser(ctx);
   const website = await getWebsite(ctx, websiteKey);
+  return setCommentReactionForWebsite(ctx, website, commentId, content);
+}
+
+export async function deleteCommentReaction(ctx: AppContext, websiteKey: string, commentId: number, content: string): Promise<void> {
+  const website = await getWebsite(ctx, websiteKey);
+  await deleteCommentReactionForWebsite(ctx, website, commentId, content);
+}
+
+async function setCommentReactionForWebsite(ctx: AppContext, website: WebsiteRow, commentId: number, content: string): Promise<ReactionCounts> {
+  const actor = requireUser(ctx);
   await requireNotWebsiteBanned(ctx, website.id);
   if (!ALLOWED_REACTIONS.has(content)) throw ApiError.validation("Reaction", "content", "invalid");
   await ensureActiveCommentInWebsite(ctx, website.id, commentId);
@@ -609,16 +673,16 @@ export async function setCommentReaction(ctx: AppContext, websiteKey: string, co
   return rebuildCachedReactions(ctx, commentId);
 }
 
-export async function deleteCommentReaction(ctx: AppContext, websiteKey: string, commentId: number, content: string): Promise<void> {
+async function deleteCommentReactionForWebsite(ctx: AppContext, website: WebsiteRow, commentId: number, content: string): Promise<void> {
   const actor = requireUser(ctx);
-  const website = await getWebsite(ctx, websiteKey);
   await requireNotWebsiteBanned(ctx, website.id);
   if (!ALLOWED_REACTIONS.has(content)) throw ApiError.validation("Reaction", "content", "invalid");
   await ensureActiveCommentInWebsite(ctx, website.id, commentId);
-  const affected = await ctx.db.execute(
-    "DELETE FROM comment_reactions WHERE comment_id = ?1 AND user_id = ?2 AND content = ?3",
-    [commentId, actor.id, content]
-  );
+  const affected = await ctx.db.execute("DELETE FROM comment_reactions WHERE comment_id = ?1 AND user_id = ?2 AND content = ?3", [
+    commentId,
+    actor.id,
+    content
+  ]);
   if (affected > 0) await rebuildCachedReactions(ctx, commentId);
 }
 
@@ -647,15 +711,13 @@ export async function listModerationComments(ctx: AppContext, websiteKey: string
     filters.push(`c.user_id = ?${idx++}`);
     params.push(Number(authorId));
   }
-  const pointers = await ctx.db.all<{ id: number }>(
-    `SELECT c.id FROM comments c JOIN pages p ON p.id = c.page_id WHERE ${filters.join(" AND ")} ORDER BY c.id ASC LIMIT ?${idx}`,
+  const rows = await ctx.db.all<CommentRow>(
+    `SELECT ${COMMENT_ROW_COLUMNS} ${COMMENT_ROW_FROM} WHERE ${filters.join(" AND ")} ORDER BY c.id ASC LIMIT ?${idx}`,
     [...params, limit + 1]
   );
-  const hasMore = pointers.length > limit;
-  if (hasMore) pointers.pop();
-  const data = [];
-  for (const pointer of pointers) data.push(commentResponse(await getCommentRow(ctx, website.id, pointer.id)));
-  return cursorPage(data, hasMore, pointers.at(-1)?.id ?? null);
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
+  return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
 }
 
 export async function banWebsiteUser(ctx: AppContext, websiteKey: string, input: any) {
@@ -709,7 +771,7 @@ export async function getCurrentComments(ctx: AppContext, referer: string | unde
 export async function createCurrentComment(ctx: AppContext, referer: string | undefined, input: any) {
   const title = typeof input.page_title === "string" ? input.page_title : null;
   const resolved = await resolveCurrentPage(ctx, referer, title);
-  return createPageComment(ctx, resolved.website.key, resolved.page.key, input);
+  return createCommentForPage(ctx, resolved.website, resolved.page, input);
 }
 
 export async function listCurrentReplies(ctx: AppContext, referer: string | undefined, query: URLSearchParams) {
@@ -722,25 +784,25 @@ export async function listCurrentReplies(ctx: AppContext, referer: string | unde
 export async function setCurrentReaction(ctx: AppContext, referer: string | undefined, commentId: number, content: string) {
   const resolved = await resolveCurrentPage(ctx, referer, null);
   await ensureCommentOnPage(ctx, resolved.website.id, resolved.page.id, commentId);
-  return setCommentReaction(ctx, resolved.website.key, commentId, content);
+  return setCommentReactionForWebsite(ctx, resolved.website, commentId, content);
 }
 
 export async function deleteCurrentReaction(ctx: AppContext, referer: string | undefined, commentId: number, content: string): Promise<void> {
   const resolved = await resolveCurrentPage(ctx, referer, null);
   await ensureCommentOnPage(ctx, resolved.website.id, resolved.page.id, commentId);
-  await deleteCommentReaction(ctx, resolved.website.key, commentId, content);
+  await deleteCommentReactionForWebsite(ctx, resolved.website, commentId, content);
 }
 
 async function resolveCurrentPage(ctx: AppContext, referer: string | undefined, title: string | null): Promise<RefererResolution> {
   if (!referer) throw ApiError.badRequest("missing Referer header");
   const { website, normalizedUrl } = await resolveWebsiteByReferer(ctx, referer);
   const pageKey = await pageKeyFromUrl(normalizedUrl);
-  await upsertPageForWebsite(ctx, website, pageKey, {
+  const page = await upsertPageRowForWebsite(ctx, website, pageKey, {
     title: title || normalizedUrl,
     url: normalizedUrl,
     metadata: null
   });
-  return { website, page: await getPage(ctx, website.id, pageKey) };
+  return { website, page };
 }
 
 export async function resolveWebsiteByReferer(ctx: AppContext, referer: string): Promise<{ website: WebsiteRow; normalizedUrl: string }> {
@@ -797,18 +859,18 @@ async function createDiscoveredWebsite(ctx: AppContext, metadata: DiscoveryMetad
   const existing = await findWebsite(ctx, metadata.websiteKey);
   if (existing) return null;
 
-  await ctx.db.execute("INSERT INTO websites (key, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now'))", [
-    metadata.websiteKey,
-    metadata.name
-  ]);
-  const website = await getWebsite(ctx, metadata.websiteKey);
+  const website = await ctx.db.first<WebsiteRow>(
+    "INSERT INTO websites (key, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now')) RETURNING id, key, name, created_at, updated_at",
+    [metadata.websiteKey, metadata.name]
+  );
+  if (!website) throw ApiError.internal("failed to create discovered website");
   await ctx.db.execute("INSERT INTO website_origins (website_id, origin, created_at) VALUES (?1, ?2, datetime('now'))", [
     website.id,
     metadata.origin
   ]);
   await savePendingWebsiteAdmins(ctx, website.id, metadata.adminEmails, metadata.source);
   await claimPendingWebsiteAdminsForWebsite(ctx, website.id);
-  return await getWebsite(ctx, metadata.websiteKey);
+  return website;
 }
 
 async function hasFreshDiscoveryFailure(ctx: AppContext, origin: string): Promise<boolean> {
@@ -900,12 +962,30 @@ async function getPage(ctx: AppContext, websiteId: number, pageKey: string): Pro
 }
 
 async function websiteResponse(ctx: AppContext, website: WebsiteRow) {
-  const origins = await ctx.db.all<{ origin: string }>("SELECT origin FROM website_origins WHERE website_id = ?1 ORDER BY origin ASC", [website.id]);
+  return (await websiteResponses(ctx, [website]))[0]!;
+}
+
+async function websiteResponses(ctx: AppContext, websites: WebsiteRow[]) {
+  if (websites.length === 0) return [];
+  const origins = await ctx.db.all<{ website_id: number; origin: string }>(
+    `SELECT website_id, origin FROM website_origins WHERE website_id IN (${placeholders(websites.length)}) ORDER BY website_id ASC, origin ASC`,
+    websites.map((website) => website.id)
+  );
+  const originsByWebsiteId = new Map<number, string[]>();
+  for (const row of origins) {
+    const websiteOrigins = originsByWebsiteId.get(row.website_id);
+    if (websiteOrigins) websiteOrigins.push(row.origin);
+    else originsByWebsiteId.set(row.website_id, [row.origin]);
+  }
+  return websites.map((website) => websiteResponseFromOrigins(website, originsByWebsiteId.get(website.id) ?? []));
+}
+
+function websiteResponseFromOrigins(website: WebsiteRow, origins: string[]) {
   return {
     id: website.id,
     key: website.key,
     name: website.name,
-    origins: origins.map((row) => row.origin),
+    origins,
     created_at: toIso(website.created_at),
     updated_at: toIso(website.updated_at)
   };
@@ -931,7 +1011,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
   const order = query.get("order")?.toLowerCase() === "desc" ? "DESC" : "ASC";
   const cursorId = query.get("cursor") ? decodeCursor(query.get("cursor")!) : null;
   const flatThread = query.get("thread") === "flat";
-  const filters = ["c.website_id = ?1", "c.page_id = ?2"];
+  const filters = ["c.website_id = ?1", "c.page_id = ?2", PUBLIC_COMMENT_VISIBILITY_FILTER];
   const params: any[] = [website.id, page.id];
   let idx = 3;
   if (parent === "root") {
@@ -941,27 +1021,25 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
     if (!Number.isFinite(parentId)) throw ApiError.badRequest("invalid parent_id");
     await ensureCommentOnPage(ctx, website.id, page.id, parentId);
     if (flatThread) {
-      const flatFilters = ["c.website_id = ?1", "c.page_id = ?2"];
+      const flatFilters = ["c.website_id = ?1", "c.page_id = ?2", PUBLIC_COMMENT_VISIBILITY_FILTER];
       const flatParams: any[] = [website.id, page.id, parentId, website.id, page.id];
       let flatIdx = 6;
       if (cursorId != null) {
         flatFilters.push(order === "DESC" ? `c.id < ?${flatIdx++}` : `c.id > ?${flatIdx++}`);
         flatParams.push(cursorId);
       }
-      const pointers = await ctx.db.all<{ id: number }>(
+      const rows = await ctx.db.all<CommentRow>(
         `WITH RECURSIVE descendants(id) AS (
           SELECT id FROM comments WHERE website_id = ?1 AND page_id = ?2 AND parent_comment_id = ?3
           UNION ALL
           SELECT c.id FROM comments c JOIN descendants d ON c.parent_comment_id = d.id WHERE c.website_id = ?4 AND c.page_id = ?5
         )
-        SELECT c.id FROM comments c JOIN descendants d ON d.id = c.id WHERE ${flatFilters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${flatIdx}`,
+        SELECT ${COMMENT_ROW_COLUMNS} FROM comments c JOIN descendants d ON d.id = c.id JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE ${flatFilters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${flatIdx}`,
         [...flatParams, limit + 1]
       );
-      const hasMore = pointers.length > limit;
-      if (hasMore) pointers.pop();
-      const data = [];
-      for (const pointer of pointers) data.push(commentResponse(await getCommentRow(ctx, website.id, pointer.id)));
-      return cursorPage(data, hasMore, pointers.at(-1)?.id ?? null);
+      const hasMore = rows.length > limit;
+      if (hasMore) rows.pop();
+      return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
     } else {
       filters.push(`c.parent_comment_id = ?${idx++}`);
       params.push(parentId);
@@ -971,20 +1049,18 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
     filters.push(order === "DESC" ? `c.id < ?${idx++}` : `c.id > ?${idx++}`);
     params.push(cursorId);
   }
-  const pointers = await ctx.db.all<{ id: number }>(
-    `SELECT c.id FROM comments c WHERE ${filters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${idx}`,
+  const rows = await ctx.db.all<CommentRow>(
+    `SELECT ${COMMENT_ROW_COLUMNS} ${COMMENT_ROW_FROM} WHERE ${filters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${idx}`,
     [...params, limit + 1]
   );
-  const hasMore = pointers.length > limit;
-  if (hasMore) pointers.pop();
-  const data = [];
-  for (const pointer of pointers) data.push(commentResponse(await getCommentRow(ctx, website.id, pointer.id)));
-  return cursorPage(data, hasMore, pointers.at(-1)?.id ?? null);
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
+  return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
 }
 
 async function getCommentRow(ctx: AppContext, websiteId: number, commentId: number): Promise<CommentRow> {
   const row = await ctx.db.first<CommentRow>(
-    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
+    `SELECT ${COMMENT_ROW_COLUMNS} ${COMMENT_ROW_FROM} WHERE c.website_id = ?1 AND c.id = ?2`,
     [websiteId, commentId]
   );
   if (!row) throw ApiError.notFound("Comment");
@@ -1087,6 +1163,10 @@ function cursorPage<T>(data: T[], hasMore: boolean, lastId: number | null) {
 
 function listLimit(query: URLSearchParams): number {
   return Math.min(100, Math.max(1, Number.parseInt(query.get("limit") ?? "20", 10) || 20));
+}
+
+function placeholders(count: number, start = 1): string {
+  return Array.from({ length: count }, (_, index) => `?${start + index}`).join(", ");
 }
 
 function normalizeKey(value: unknown, resource: string, field: string): string {
