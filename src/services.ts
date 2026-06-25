@@ -20,6 +20,7 @@ import {
 } from "./utils";
 
 const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray", "confused", "rocket", "eyes"]);
+const ACCOUNT_PROFILE_REFRESH_TTL_SECONDS = 24 * 60 * 60;
 
 interface UserRow {
   id: number;
@@ -29,6 +30,7 @@ interface UserRow {
   avatar_url: string;
   type: string;
   site_admin: number;
+  cached_at: string;
 }
 
 interface CommentRow {
@@ -45,6 +47,7 @@ interface CommentRow {
   deleted_at: string | null;
   reactions: string;
   login: string;
+  display_name: string;
   avatar_url: string;
   author_is_website_admin: number;
 }
@@ -62,6 +65,7 @@ function userFromRow(row: UserRow, accountSub?: string): AuthUser {
     email: row.email ?? "",
     avatar_url: row.avatar_url ?? "",
     type: row.type ?? "User",
+    cached_at: row.cached_at,
     ...(accountSub ? { account_sub: accountSub } : {})
   };
 }
@@ -85,7 +89,7 @@ export async function resolveAtriumJwtUser(ctx: AppContext, token: string): Prom
   if (claims.token_type === "refresh") throw ApiError.unauthorized();
   const userId = Number.parseInt(String(claims.sub ?? ""), 10);
   if (!Number.isFinite(userId)) throw ApiError.unauthorized();
-  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin, cached_at FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.unauthorized();
   return userFromRow(row);
 }
@@ -124,7 +128,7 @@ export async function refreshAtriumTokens(ctx: AppContext, refreshToken: string)
   if (claims.token_type !== "refresh") throw ApiError.unauthorized();
   const userId = Number.parseInt(String(claims.sub ?? ""), 10);
   if (!Number.isFinite(userId)) throw ApiError.unauthorized();
-  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin, cached_at FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.unauthorized();
   return issueAtriumTokens(ctx, userFromRow(row));
 }
@@ -134,13 +138,17 @@ export async function resolveNativeRequestUser(
   authHeader: string | undefined,
   cookieHeader: string | null | undefined
 ): Promise<AuthUser | null> {
-  const accountUser = await resolveAccountCookieUser(ctx, cookieHeader);
-  if (accountUser) return accountUser;
-
   const token = parseToken(authHeader) ?? cookieValue(cookieHeader, ACCESS_COOKIE);
-  if (!token) return null;
-  if (ctx.jwtSecret.length < 16) throw ApiError.internal("JWT_SECRET is not configured");
-  return await resolveAtriumJwtUser(ctx, token);
+  if (token) {
+    if (ctx.jwtSecret.length < 16) throw ApiError.internal("JWT_SECRET is not configured");
+    const user = await resolveAtriumJwtUser(ctx, token);
+    if (isAccountProfileRefreshDue(user)) {
+      return (await resolveAccountCookieUser(ctx, cookieHeader)) ?? user;
+    }
+    return user;
+  }
+
+  return await resolveAccountCookieUser(ctx, cookieHeader);
 }
 
 export async function resolveAccountCookieUser(ctx: AppContext, cookieHeader: string | null | undefined): Promise<AuthUser | null> {
@@ -171,7 +179,7 @@ async function resolveOrCreateProviderUser(
   }
 ): Promise<AuthUser> {
   const identity = await ctx.db.first<UserRow>(
-    "SELECT u.id, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.provider = ?1 AND ui.provider_user_id = ?2",
+    "SELECT u.id, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin, u.cached_at FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.provider = ?1 AND ui.provider_user_id = ?2",
     [providerUser.provider, providerUser.provider_user_id]
   );
   if (identity) {
@@ -226,7 +234,7 @@ async function resolveOrCreateProviderUser(
     "INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now')) ON CONFLICT(provider, provider_user_id) DO UPDATE SET user_id = excluded.user_id, email = excluded.email, avatar_url = excluded.avatar_url, cached_at = datetime('now')",
     [userId, providerUser.provider, providerUser.provider_user_id, providerUser.email, providerUser.avatar_url]
   );
-  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin, cached_at FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.internal("failed to load user");
   const user = userFromRow(row, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
   await claimPendingWebsiteAdmins(ctx, user);
@@ -256,6 +264,13 @@ async function allocateLoginForUser(ctx: AppContext, preferred: string, currentU
     if (!exists || exists.id === currentUserId) return candidate;
   }
   throw ApiError.internal("unable to allocate login");
+}
+
+function isAccountProfileRefreshDue(user: AuthUser): boolean {
+  if (!user.cached_at) return true;
+  const cachedAtMs = Date.parse(user.cached_at.includes("T") ? user.cached_at : `${user.cached_at.replace(" ", "T")}Z`);
+  if (!Number.isFinite(cachedAtMs)) return true;
+  return timestampSeconds() - Math.floor(cachedAtMs / 1000) >= ACCOUNT_PROFILE_REFRESH_TTL_SECONDS;
 }
 
 export function requireUser(ctx: AppContext): AuthUser {
@@ -969,7 +984,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
 
 async function getCommentRow(ctx: AppContext, websiteId: number, commentId: number): Promise<CommentRow> {
   const row = await ctx.db.first<CommentRow>(
-    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
+    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
     [websiteId, commentId]
   );
   if (!row) throw ApiError.notFound("Comment");
@@ -1013,6 +1028,7 @@ function commentResponse(row: CommentRow) {
     author: {
       id: row.user_id,
       login: row.login,
+      display_name: row.display_name || row.login,
       avatar_url: row.avatar_url,
       is_website_admin: row.author_is_website_admin === 1
     },

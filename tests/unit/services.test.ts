@@ -12,6 +12,7 @@ type UserRow = {
   avatar_url: string;
   type: string;
   site_admin: number;
+  cached_at: string;
 };
 
 type IdentityRow = {
@@ -31,7 +32,8 @@ class FakeDb {
       email: "old@example.com",
       avatar_url: "https://account.jihuayu.com/old.png",
       type: "User",
-      site_admin: 0
+      site_admin: 0,
+      cached_at: isoHoursAgo(1)
     }
   ];
   identities: IdentityRow[] = [
@@ -58,7 +60,7 @@ class FakeDb {
       return (user ? ({ id: user.id } as T) : null) ?? null;
     }
 
-    if (sql === "SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1") {
+    if (sql === "SELECT id, login, display_name, email, avatar_url, type, site_admin, cached_at FROM users WHERE id = ?1") {
       const [id] = params;
       const user = this.users.find((item) => item.id === Number(id));
       return (user as T | undefined) ?? null;
@@ -114,6 +116,10 @@ function ctx(db: FakeDb): AppContext {
     jwtSecret: new TextEncoder().encode("atrium-account-test-secret"),
     statefulSessions: false
   };
+}
+
+function isoHoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 }
 
 describe("account user sync", () => {
@@ -203,8 +209,35 @@ describe("account user sync", () => {
     });
   });
 
-  test("prefers active account SSO over a stale Atrium access cookie", async () => {
+  test("uses Atrium access token without account introspection while profile cache is fresh", async () => {
     const db = new FakeDb();
+    db.users[0]!.cached_at = isoHoursAgo(23);
+    const appCtx = ctx(db);
+    const accessToken = await signJwt(
+      {
+        sub: "1",
+        login: "old-login",
+        token_type: "access"
+      },
+      appCtx.jwtSecret
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await resolveNativeRequestUser(appCtx, undefined, `atrium_access=${accessToken}; __Secure-jihuayu_sso=session`);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(user).toMatchObject({
+      id: 1,
+      login: "user",
+      display_name: "Old Name",
+      email: "old@example.com"
+    });
+  });
+
+  test("refreshes account profile when Atrium user cache is older than 24 hours", async () => {
+    const db = new FakeDb();
+    db.users[0]!.cached_at = isoHoursAgo(25);
     const appCtx = ctx(db);
     const staleAccessToken = await signJwt(
       {

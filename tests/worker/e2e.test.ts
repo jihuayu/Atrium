@@ -163,13 +163,13 @@ describe("Atrium native Worker API", () => {
     expect(comment.status).toBe(201);
     const commentBody = await json(comment);
     const commentId = commentBody.id;
-    expect(commentBody.author).toMatchObject({ id: 3, is_website_admin: false });
+    expect(commentBody.author).toMatchObject({ id: 3, login: "alice", display_name: "alice", is_website_admin: false });
     expect(commentBody.author).not.toHaveProperty("email");
 
     const adminComment = await owner.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "admin note" });
     expect(adminComment.status).toBe(201);
     const adminCommentBody = await json(adminComment);
-    expect(adminCommentBody.author).toMatchObject({ id: 2, is_website_admin: true });
+    expect(adminCommentBody.author).toMatchObject({ id: 2, login: "owner", display_name: "owner", is_website_admin: true });
     expect(adminCommentBody.author).not.toHaveProperty("email");
 
     const reply = await bob.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "reply", parent_id: commentId });

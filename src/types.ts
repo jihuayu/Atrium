@@ -23,6 +23,7 @@ export interface AuthUser {
   email: string;
   avatar_url: string;
   type: string;
+  cached_at?: string;
   account_sub?: string;
 }
 
