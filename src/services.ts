@@ -22,9 +22,8 @@ import {
 const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray", "confused", "rocket", "eyes"]);
 const ACCOUNT_PROFILE_REFRESH_TTL_SECONDS = 24 * 60 * 60;
 const COMMENT_ROW_COLUMNS =
-  "c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin";
-const COMMENT_ROW_FROM =
-  "FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id";
+  "c.id, c.website_id, c.page_id, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin";
+const COMMENT_ROW_FROM = "FROM comments c JOIN users u ON u.id = c.user_id";
 const PUBLIC_COMMENT_VISIBILITY_FILTER =
   "(c.deleted_at IS NULL OR (c.parent_comment_id IS NULL AND EXISTS (SELECT 1 FROM comments child WHERE child.website_id = c.website_id AND child.page_id = c.page_id AND child.parent_comment_id = c.id)))";
 
@@ -42,9 +41,7 @@ interface UserRow {
 interface CommentRow {
   id: number;
   website_id: number;
-  website_key: string;
   page_id: number;
-  page_key: string;
   parent_comment_id: number | null;
   body: string;
   user_id: number;
@@ -61,6 +58,11 @@ interface CommentRow {
 interface RefererResolution {
   website: WebsiteRow;
   page: PageRow;
+}
+
+interface OptionalRefererResolution {
+  website: WebsiteRow;
+  page: PageRow | null;
 }
 
 function userFromRow(row: UserRow, accountSub?: string): AuthUser {
@@ -582,6 +584,28 @@ async function upsertPageForWebsite(ctx: AppContext, website: WebsiteRow, pageKe
 }
 
 async function upsertPageRowForWebsite(ctx: AppContext, website: WebsiteRow, pageKey: string, input: any): Promise<PageRow> {
+  const pageInput = normalizedPageInput(pageKey, input);
+  const row = await ctx.db.first<PageRow>(
+    "INSERT INTO pages (website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now')) ON CONFLICT(website_id, key) DO UPDATE SET title = excluded.title, url = excluded.url, normalized_url = excluded.normalized_url, metadata = excluded.metadata, updated_at = datetime('now') RETURNING id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at",
+    [website.id, pageInput.key, pageInput.title, pageInput.rawUrl, pageInput.normalizedUrl, pageInput.metadata]
+  );
+  if (!row) throw ApiError.internal("failed to upsert page");
+  return row;
+}
+
+async function insertPageRowForWebsite(ctx: AppContext, website: WebsiteRow, pageKey: string, input: any): Promise<PageRow> {
+  const pageInput = normalizedPageInput(pageKey, input);
+  const row = await ctx.db.first<PageRow>(
+    "INSERT INTO pages (website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now')) ON CONFLICT(website_id, key) DO NOTHING RETURNING id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at",
+    [website.id, pageInput.key, pageInput.title, pageInput.rawUrl, pageInput.normalizedUrl, pageInput.metadata]
+  );
+  if (row) return row;
+  const existing = await findPage(ctx, website.id, pageInput.key);
+  if (existing) return existing;
+  throw ApiError.internal("failed to create page");
+}
+
+function normalizedPageInput(pageKey: string, input: any) {
   const key = normalizeKey(pageKey, "Page", "key");
   const rawUrl = String(input.url ?? "").trim();
   if (!rawUrl) throw ApiError.validation("Page", "url", "missing_field");
@@ -589,12 +613,7 @@ async function upsertPageRowForWebsite(ctx: AppContext, website: WebsiteRow, pag
   const title = String(input.title ?? normalizedUrl).trim();
   if (!title) throw ApiError.validation("Page", "title", "missing_field");
   const metadata = input.metadata == null ? null : JSON.stringify(input.metadata);
-  const row = await ctx.db.first<PageRow>(
-    "INSERT INTO pages (website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now'), datetime('now')) ON CONFLICT(website_id, key) DO UPDATE SET title = excluded.title, url = excluded.url, normalized_url = excluded.normalized_url, metadata = excluded.metadata, updated_at = datetime('now') RETURNING id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at",
-    [website.id, key, title, rawUrl, normalizedUrl, metadata]
-  );
-  if (!row) throw ApiError.internal("failed to upsert page");
-  return row;
+  return { key, rawUrl, normalizedUrl, title, metadata };
 }
 
 export async function createPageComment(ctx: AppContext, websiteKey: string, pageKey: string, input: any) {
@@ -711,8 +730,9 @@ export async function listModerationComments(ctx: AppContext, websiteKey: string
     filters.push(`c.user_id = ?${idx++}`);
     params.push(Number(authorId));
   }
+  const from = pageKey ? `${COMMENT_ROW_FROM} JOIN pages p ON p.id = c.page_id` : COMMENT_ROW_FROM;
   const rows = await ctx.db.all<CommentRow>(
-    `SELECT ${COMMENT_ROW_COLUMNS} ${COMMENT_ROW_FROM} WHERE ${filters.join(" AND ")} ORDER BY c.id ASC LIMIT ?${idx}`,
+    `SELECT ${COMMENT_ROW_COLUMNS} ${from} WHERE ${filters.join(" AND ")} ORDER BY c.id ASC LIMIT ?${idx}`,
     [...params, limit + 1]
   );
   const hasMore = rows.length > limit;
@@ -759,45 +779,53 @@ export async function unbanWebsiteUser(ctx: AppContext, websiteKey: string, user
 }
 
 export async function getCurrentComments(ctx: AppContext, referer: string | undefined, query: URLSearchParams) {
-  const resolved = await resolveCurrentPage(ctx, referer, query.get("page_title"));
-  const comments = await listCommentsForPage(ctx, resolved.website, resolved.page, "root", query);
-  return {
-    website: await websiteResponse(ctx, resolved.website),
-    page: pageResponse(resolved.page, resolved.website),
-    comments
-  };
+  const resolved = await resolveCurrentPageForRead(ctx, referer);
+  if (!resolved.page) return emptyCursorPage();
+  return listCommentsForPage(ctx, resolved.website, resolved.page, "root", query);
 }
 
 export async function createCurrentComment(ctx: AppContext, referer: string | undefined, input: any) {
   const title = typeof input.page_title === "string" ? input.page_title : null;
-  const resolved = await resolveCurrentPage(ctx, referer, title);
+  const resolved = await resolveCurrentPageForWrite(ctx, referer, title);
   return createCommentForPage(ctx, resolved.website, resolved.page, input);
 }
 
 export async function listCurrentReplies(ctx: AppContext, referer: string | undefined, query: URLSearchParams) {
-  const resolved = await resolveCurrentPage(ctx, referer, query.get("page_title"));
+  const resolved = await resolveCurrentPageForRead(ctx, referer);
   const commentId = query.get("comment_id");
   if (!commentId) throw ApiError.badRequest("missing comment_id");
+  if (!resolved.page) return emptyCursorPage();
   return listCommentsForPage(ctx, resolved.website, resolved.page, commentId, query);
 }
 
 export async function setCurrentReaction(ctx: AppContext, referer: string | undefined, commentId: number, content: string) {
-  const resolved = await resolveCurrentPage(ctx, referer, null);
+  const resolved = await resolveCurrentPageForRead(ctx, referer);
+  if (!resolved.page) throw ApiError.notFound("Page");
   await ensureCommentOnPage(ctx, resolved.website.id, resolved.page.id, commentId);
   return setCommentReactionForWebsite(ctx, resolved.website, commentId, content);
 }
 
 export async function deleteCurrentReaction(ctx: AppContext, referer: string | undefined, commentId: number, content: string): Promise<void> {
-  const resolved = await resolveCurrentPage(ctx, referer, null);
+  const resolved = await resolveCurrentPageForRead(ctx, referer);
+  if (!resolved.page) throw ApiError.notFound("Page");
   await ensureCommentOnPage(ctx, resolved.website.id, resolved.page.id, commentId);
   await deleteCommentReactionForWebsite(ctx, resolved.website, commentId, content);
 }
 
-async function resolveCurrentPage(ctx: AppContext, referer: string | undefined, title: string | null): Promise<RefererResolution> {
+async function resolveCurrentPageForRead(ctx: AppContext, referer: string | undefined): Promise<OptionalRefererResolution> {
   if (!referer) throw ApiError.badRequest("missing Referer header");
   const { website, normalizedUrl } = await resolveWebsiteByReferer(ctx, referer);
   const pageKey = await pageKeyFromUrl(normalizedUrl);
-  const page = await upsertPageRowForWebsite(ctx, website, pageKey, {
+  return { website, page: await findPage(ctx, website.id, pageKey) };
+}
+
+async function resolveCurrentPageForWrite(ctx: AppContext, referer: string | undefined, title: string | null): Promise<RefererResolution> {
+  if (!referer) throw ApiError.badRequest("missing Referer header");
+  const { website, normalizedUrl } = await resolveWebsiteByReferer(ctx, referer);
+  const pageKey = await pageKeyFromUrl(normalizedUrl);
+  const existingPage = await findPage(ctx, website.id, pageKey);
+  if (existingPage) return { website, page: existingPage };
+  const page = await insertPageRowForWebsite(ctx, website, pageKey, {
     title: title || normalizedUrl,
     url: normalizedUrl,
     metadata: null
@@ -953,12 +981,16 @@ async function getWebsite(ctx: AppContext, websiteKey: string): Promise<WebsiteR
 }
 
 async function getPage(ctx: AppContext, websiteId: number, pageKey: string): Promise<PageRow> {
-  const row = await ctx.db.first<PageRow>(
+  const row = await findPage(ctx, websiteId, pageKey);
+  if (!row) throw ApiError.notFound("Page");
+  return row;
+}
+
+async function findPage(ctx: AppContext, websiteId: number, pageKey: string): Promise<PageRow | null> {
+  return ctx.db.first<PageRow>(
     "SELECT id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at FROM pages WHERE website_id = ?1 AND key = ?2",
     [websiteId, pageKey]
   );
-  if (!row) throw ApiError.notFound("Page");
-  return row;
 }
 
 async function websiteResponse(ctx: AppContext, website: WebsiteRow) {
@@ -1034,7 +1066,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
           UNION ALL
           SELECT c.id FROM comments c JOIN descendants d ON c.parent_comment_id = d.id WHERE c.website_id = ?4 AND c.page_id = ?5
         )
-        SELECT ${COMMENT_ROW_COLUMNS} FROM comments c JOIN descendants d ON d.id = c.id JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE ${flatFilters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${flatIdx}`,
+        SELECT ${COMMENT_ROW_COLUMNS} FROM comments c JOIN descendants d ON d.id = c.id JOIN users u ON u.id = c.user_id WHERE ${flatFilters.join(" AND ")} ORDER BY c.id ${order} LIMIT ?${flatIdx}`,
         [...flatParams, limit + 1]
       );
       const hasMore = rows.length > limit;
@@ -1096,8 +1128,6 @@ function commentResponse(row: CommentRow) {
   const reactions = deleted ? emptyReactionCounts() : parseReactionCounts(row.reactions);
   return {
     id: row.id,
-    website_key: row.website_key,
-    page_key: row.page_key,
     parent_id: row.parent_comment_id,
     body: deleted ? "" : row.body,
     body_html: deleted ? "" : renderMarkdown(row.body),
@@ -1159,6 +1189,10 @@ function cursorPage<T>(data: T[], hasMore: boolean, lastId: number | null) {
       has_more: hasMore
     }
   };
+}
+
+function emptyCursorPage<T>() {
+  return cursorPage<T>([], false, null);
 }
 
 function listLimit(query: URLSearchParams): number {

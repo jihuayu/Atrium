@@ -34,5 +34,5 @@ The Worker E2E suite covers:
 - Removal of the old GitHub-compatible and repo/thread routes.
 - Native auth, Jihuayu Account SSO cookie login branches, and super-admin environment variable behavior.
 - Website creation, website admin management, page upsert, comments, replies, reactions, moderation, and website-scoped bans.
-- Quick `Referer` mode for resolving website/page records without explicit path parameters.
+- Quick `Referer` mode for resolving website/page records without explicit path parameters; comment reads do not create or update page rows.
 - D1-backed read/write behavior through Wrangler local D1.

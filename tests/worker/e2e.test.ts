@@ -272,7 +272,7 @@ describe("Atrium native Worker API", () => {
     expect((await alice.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "after unban" })).status).toBe(201);
   });
 
-  test("quick Referer mode resolves website and page without creating websites", async () => {
+  test("quick Referer mode reads comments without creating pages", async () => {
     await ensureUsers();
     await createWebsite("quick-blog", "https://quick.example.com");
 
@@ -285,9 +285,12 @@ describe("Atrium native Worker API", () => {
     const current = await anon.get("/api/v1/comments/current?page_title=Quick%20Post", { Referer: referer });
     expect(current.status).toBe(200);
     const currentBody = await json(current);
-    expect(currentBody.website.key).toBe("quick-blog");
-    expect(currentBody.page.key).toMatch(/^url-/);
-    expect(currentBody.page.normalized_url).toBe("https://quick.example.com/quick-post?a=1&z=9");
+    expect(currentBody).toMatchObject({
+      data: [],
+      pagination: { next_cursor: null, has_more: false }
+    });
+    expect(currentBody).not.toHaveProperty("website");
+    expect(currentBody).not.toHaveProperty("page");
 
     const quickComment = await alice.post("/api/v1/comments/current", { body: "quick" }, { Referer: referer });
     expect(quickComment.status).toBe(201);
@@ -357,11 +360,18 @@ async function expectDiscoveredWebsite(origin: string, websiteKey: string) {
   const response = await anon.get("/api/v1/comments/current?page_title=Discovered", { Referer: referer });
   expect(response.status).toBe(200);
   const body = await json(response);
-  expect(body.website.key).toBe(websiteKey);
-  expect(body.website.origins).toEqual([origin]);
-  expect(body.page.normalized_url).toBe(`${origin}/post?a=1&z=9`);
+  expect(body).toMatchObject({
+    data: [],
+    pagination: { next_cursor: null, has_more: false }
+  });
+  expect(body).not.toHaveProperty("website");
+  expect(body).not.toHaveProperty("page");
 
   const admins = await owner.get(`/api/v1/websites/${websiteKey}/admins`);
   expect(admins.status).toBe(200);
   expect((await json(admins)).data.map((entry: any) => entry.user.email)).toContain("owner@test.com");
+
+  const pages = await owner.get(`/api/v1/websites/${websiteKey}/pages`);
+  expect(pages.status).toBe(200);
+  expect((await json(pages)).data).toEqual([]);
 }
