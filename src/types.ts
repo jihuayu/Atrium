@@ -19,6 +19,7 @@ export interface Env {
 export interface AuthUser {
   id: number;
   login: string;
+  display_name?: string;
   email: string;
   avatar_url: string;
   type: string;
@@ -28,6 +29,7 @@ export interface AuthUser {
 export interface PublicUser {
   id: number;
   login: string;
+  display_name: string;
   avatar_url: string;
   email?: string;
 }

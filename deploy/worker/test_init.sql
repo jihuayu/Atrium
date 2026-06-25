@@ -4,6 +4,7 @@
 CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     login      TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL DEFAULT '',
     email      TEXT NOT NULL DEFAULT '',
     avatar_url TEXT NOT NULL DEFAULT '',
     type       TEXT NOT NULL DEFAULT 'User',

@@ -40,9 +40,11 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 export function toPublicUser(user: AuthUser, includeEmail = false): PublicUser {
+  const displayName = user.display_name || user.login;
   return {
     id: user.id,
-    login: user.login,
+    login: displayName,
+    display_name: displayName,
     avatar_url: user.avatar_url,
     ...(includeEmail ? { email: user.email } : {})
   };

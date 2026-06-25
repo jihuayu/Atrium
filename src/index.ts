@@ -14,7 +14,6 @@ import {
   clearCookie,
   cookieValue,
   parseSecret,
-  parseToken,
   secureFromBaseUrl,
   toPublicUser
 } from "./utils";
@@ -238,7 +237,7 @@ async function buildContext(c: Context<{ Bindings: Env; Variables: Vars }>): Pro
   const path = new URL(c.req.url).pathname;
   if (path.startsWith("/api/v1/auth/refresh") || path.endsWith("/authorize")) return ctx;
   if (path.startsWith("/api/v1/")) {
-    ctx.user = (await resolveNativeRequestUser(ctx, authHeader, c.req.header("Cookie"))) ?? undefined;
+    ctx.user = (await svc.resolveNativeRequestUser(ctx, authHeader, c.req.header("Cookie"))) ?? undefined;
   }
   return ctx;
 }
@@ -321,15 +320,6 @@ async function accountCallback(c: Context<{ Bindings: Env; Variables: Vars }>, c
     response = withAuthCookies(ctx, response, await svc.issueAtriumTokens(ctx, ctx.user));
   }
   return response;
-}
-
-async function resolveNativeRequestUser(ctx: AppContext, authHeader: string | undefined, cookieHeader: string | null | undefined): Promise<AuthUser | null> {
-  const token = parseToken(authHeader) ?? cookieValue(cookieHeader, ACCESS_COOKIE);
-  if (token) {
-    ensureJwtSecret(ctx);
-    return await svc.resolveAtriumJwtUser(ctx, token);
-  }
-  return await svc.resolveAccountCookieUser(ctx, cookieHeader);
 }
 
 function hasUsableJwtSecret(ctx: AppContext): boolean {

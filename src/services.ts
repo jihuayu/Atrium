@@ -1,4 +1,4 @@
-import { introspectAccountCookie } from "./account-auth";
+import { accountSessionAvatarUrl, accountSessionDisplayName, introspectAccountCookie } from "./account-auth";
 import { discoverOriginMetadata, discoveryPublicKeyResponse, type DiscoveryFailure, type DiscoveryMetadata } from "./discovery";
 import { ApiError } from "./error";
 import type { AppContext, AuthUser, PageRow, ReactionCounts, WebsiteRow } from "./types";
@@ -13,7 +13,10 @@ import {
   timestampSeconds,
   toIso,
   toPublicUser,
-  verifyAtriumJwt
+  verifyAtriumJwt,
+  ACCESS_COOKIE,
+  cookieValue,
+  parseToken
 } from "./utils";
 
 const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray", "confused", "rocket", "eyes"]);
@@ -21,6 +24,7 @@ const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray"
 interface UserRow {
   id: number;
   login: string;
+  display_name: string;
   email: string;
   avatar_url: string;
   type: string;
@@ -54,6 +58,7 @@ function userFromRow(row: UserRow, accountSub?: string): AuthUser {
   return {
     id: row.id,
     login: row.login,
+    display_name: row.display_name || row.login,
     email: row.email ?? "",
     avatar_url: row.avatar_url ?? "",
     type: row.type ?? "User",
@@ -63,8 +68,8 @@ function userFromRow(row: UserRow, accountSub?: string): AuthUser {
 
 export async function upsertAuthUser(ctx: AppContext, user: AuthUser): Promise<void> {
   await ctx.db.execute(
-    "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now')) ON CONFLICT(id) DO UPDATE SET login = excluded.login, email = excluded.email, avatar_url = excluded.avatar_url, type = excluded.type, cached_at = datetime('now')",
-    [user.id, user.login, user.email, user.avatar_url, user.type]
+    "INSERT INTO users (id, login, display_name, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, datetime('now')) ON CONFLICT(id) DO UPDATE SET login = excluded.login, display_name = excluded.display_name, email = excluded.email, avatar_url = excluded.avatar_url, type = excluded.type, cached_at = datetime('now')",
+    [user.id, user.login, user.display_name ?? user.login, user.email, user.avatar_url, user.type]
   );
   if (user.account_sub) {
     await ctx.db.execute(
@@ -80,7 +85,7 @@ export async function resolveAtriumJwtUser(ctx: AppContext, token: string): Prom
   if (claims.token_type === "refresh") throw ApiError.unauthorized();
   const userId = Number.parseInt(String(claims.sub ?? ""), 10);
   if (!Number.isFinite(userId)) throw ApiError.unauthorized();
-  const row = await ctx.db.first<UserRow>("SELECT id, login, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.unauthorized();
   return userFromRow(row);
 }
@@ -119,9 +124,23 @@ export async function refreshAtriumTokens(ctx: AppContext, refreshToken: string)
   if (claims.token_type !== "refresh") throw ApiError.unauthorized();
   const userId = Number.parseInt(String(claims.sub ?? ""), 10);
   if (!Number.isFinite(userId)) throw ApiError.unauthorized();
-  const row = await ctx.db.first<UserRow>("SELECT id, login, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.unauthorized();
   return issueAtriumTokens(ctx, userFromRow(row));
+}
+
+export async function resolveNativeRequestUser(
+  ctx: AppContext,
+  authHeader: string | undefined,
+  cookieHeader: string | null | undefined
+): Promise<AuthUser | null> {
+  const accountUser = await resolveAccountCookieUser(ctx, cookieHeader);
+  if (accountUser) return accountUser;
+
+  const token = parseToken(authHeader) ?? cookieValue(cookieHeader, ACCESS_COOKIE);
+  if (!token) return null;
+  if (ctx.jwtSecret.length < 16) throw ApiError.internal("JWT_SECRET is not configured");
+  return await resolveAtriumJwtUser(ctx, token);
 }
 
 export async function resolveAccountCookieUser(ctx: AppContext, cookieHeader: string | null | undefined): Promise<AuthUser | null> {
@@ -130,9 +149,10 @@ export async function resolveAccountCookieUser(ctx: AppContext, cookieHeader: st
   const user = await resolveOrCreateProviderUser(ctx, {
     provider: "account",
     provider_user_id: accountUser.sub,
-    login: accountUser.handle || accountUser.email || accountUser.displayName || `account-${accountUser.sub}`,
+    login: `account-${accountUser.sub}`,
+    display_name: accountSessionDisplayName(accountUser),
     email: accountUser.email ?? "",
-    avatar_url: accountUser.avatarUrl ?? "",
+    avatar_url: accountSessionAvatarUrl(accountUser),
     type: "User"
   });
   return { ...user, account_sub: accountUser.sub };
@@ -144,20 +164,22 @@ async function resolveOrCreateProviderUser(
     provider: string;
     provider_user_id: string;
     login: string;
+    display_name?: string;
     email: string;
     avatar_url: string;
     type: string;
   }
 ): Promise<AuthUser> {
   const identity = await ctx.db.first<UserRow>(
-    "SELECT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.provider = ?1 AND ui.provider_user_id = ?2",
+    "SELECT u.id, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin FROM user_identities ui JOIN users u ON u.id = ui.user_id WHERE ui.provider = ?1 AND ui.provider_user_id = ?2",
     [providerUser.provider, providerUser.provider_user_id]
   );
   if (identity) {
-    const login = await allocateLoginForUser(ctx, providerUser.login, identity.id);
+    const login = await allocateProviderLoginForUser(ctx, providerUser, identity.id);
+    const displayName = providerUser.display_name ?? login;
     await ctx.db.execute(
-      "UPDATE users SET login = ?1, email = ?2, avatar_url = ?3, type = ?4, cached_at = datetime('now') WHERE id = ?5",
-      [login, providerUser.email, providerUser.avatar_url, providerUser.type, identity.id]
+      "UPDATE users SET login = ?1, display_name = ?2, email = ?3, avatar_url = ?4, type = ?5, cached_at = datetime('now') WHERE id = ?6",
+      [login, displayName, providerUser.email, providerUser.avatar_url, providerUser.type, identity.id]
     );
     await ctx.db.execute(
       "UPDATE user_identities SET email = ?1, avatar_url = ?2, cached_at = datetime('now') WHERE provider = ?3 AND provider_user_id = ?4",
@@ -167,6 +189,7 @@ async function resolveOrCreateProviderUser(
       {
         ...identity,
         login,
+        display_name: displayName,
         email: providerUser.email,
         avatar_url: providerUser.avatar_url,
         type: providerUser.type
@@ -183,28 +206,46 @@ async function resolveOrCreateProviderUser(
     userId = byEmail?.id ?? null;
   }
   if (userId === null) {
-    const login = await allocateLogin(ctx, providerUser.login);
+    const login = await allocateProviderLogin(ctx, providerUser);
+    const displayName = providerUser.display_name ?? login;
     await ctx.db.execute(
-      "INSERT INTO users (login, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, 0, datetime('now'))",
-      [login, providerUser.email, providerUser.avatar_url, providerUser.type]
+      "INSERT INTO users (login, display_name, email, avatar_url, type, site_admin, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'))",
+      [login, displayName, providerUser.email, providerUser.avatar_url, providerUser.type]
     );
     const row = await ctx.db.first<{ id: number }>("SELECT id FROM users WHERE login = ?1", [login]);
     if (!row) throw ApiError.internal("failed to create user");
     userId = row.id;
+  } else if (providerUser.display_name) {
+    const login = await allocateProviderLoginForUser(ctx, providerUser, userId);
+    await ctx.db.execute(
+      "UPDATE users SET login = ?1, display_name = ?2, email = ?3, avatar_url = ?4, type = ?5, cached_at = datetime('now') WHERE id = ?6",
+      [login, providerUser.display_name, providerUser.email, providerUser.avatar_url, providerUser.type, userId]
+    );
   }
   await ctx.db.execute(
     "INSERT INTO user_identities (user_id, provider, provider_user_id, email, avatar_url, cached_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now')) ON CONFLICT(provider, provider_user_id) DO UPDATE SET user_id = excluded.user_id, email = excluded.email, avatar_url = excluded.avatar_url, cached_at = datetime('now')",
     [userId, providerUser.provider, providerUser.provider_user_id, providerUser.email, providerUser.avatar_url]
   );
-  const row = await ctx.db.first<UserRow>("SELECT id, login, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
+  const row = await ctx.db.first<UserRow>("SELECT id, login, display_name, email, avatar_url, type, site_admin FROM users WHERE id = ?1", [userId]);
   if (!row) throw ApiError.internal("failed to load user");
   const user = userFromRow(row, providerUser.provider === "account" ? providerUser.provider_user_id : undefined);
   await claimPendingWebsiteAdmins(ctx, user);
   return user;
 }
 
-async function allocateLogin(ctx: AppContext, preferred: string): Promise<string> {
-  return allocateLoginForUser(ctx, preferred, null);
+async function allocateProviderLogin(
+  ctx: AppContext,
+  providerUser: { login: string }
+): Promise<string> {
+  return allocateProviderLoginForUser(ctx, providerUser, null);
+}
+
+async function allocateProviderLoginForUser(
+  ctx: AppContext,
+  providerUser: { login: string },
+  currentUserId: number | null
+): Promise<string> {
+  return allocateLoginForUser(ctx, providerUser.login, currentUserId);
 }
 
 async function allocateLoginForUser(ctx: AppContext, preferred: string, currentUserId: number | null): Promise<string> {
@@ -353,7 +394,7 @@ export async function updateWebsite(ctx: AppContext, websiteKey: string, input: 
 export async function listWebsiteAdmins(ctx: AppContext, websiteKey: string) {
   const website = await requireWebsiteAdminOrSuperAdmin(ctx, websiteKey);
   const rows = await ctx.db.all<any>(
-    "SELECT u.id, u.login, u.email, u.avatar_url, u.type, u.site_admin, wa.created_at FROM website_admins wa JOIN users u ON u.id = wa.user_id WHERE wa.website_id = ?1 ORDER BY wa.created_at ASC, u.id ASC",
+    "SELECT u.id, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin, wa.created_at FROM website_admins wa JOIN users u ON u.id = wa.user_id WHERE wa.website_id = ?1 ORDER BY wa.created_at ASC, u.id ASC",
     [website.id]
   );
   return {
@@ -620,7 +661,7 @@ export async function banWebsiteUser(ctx: AppContext, websiteKey: string, input:
 export async function listWebsiteBans(ctx: AppContext, websiteKey: string) {
   const website = await requireWebsiteAdminOrSuperAdmin(ctx, websiteKey);
   const rows = await ctx.db.all<any>(
-    "SELECT u.id, wb.reason, wb.banned_at, u.login, u.email, u.avatar_url, u.type, u.site_admin FROM website_bans wb JOIN users u ON u.id = wb.user_id WHERE wb.website_id = ?1 AND wb.unbanned_at IS NULL ORDER BY wb.banned_at DESC, wb.user_id ASC",
+    "SELECT u.id, wb.reason, wb.banned_at, u.login, u.display_name, u.email, u.avatar_url, u.type, u.site_admin FROM website_bans wb JOIN users u ON u.id = wb.user_id WHERE wb.website_id = ?1 AND wb.unbanned_at IS NULL ORDER BY wb.banned_at DESC, wb.user_id ASC",
     [website.id]
   );
   return {
@@ -928,7 +969,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
 
 async function getCommentRow(ctx: AppContext, websiteId: number, commentId: number): Promise<CommentRow> {
   const row = await ctx.db.first<CommentRow>(
-    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, u.login, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
+    "SELECT c.id, c.website_id, w.key AS website_key, c.page_id, p.key AS page_key, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin FROM comments c JOIN websites w ON w.id = c.website_id JOIN pages p ON p.id = c.page_id JOIN users u ON u.id = c.user_id WHERE c.website_id = ?1 AND c.id = ?2",
     [websiteId, commentId]
   );
   if (!row) throw ApiError.notFound("Comment");

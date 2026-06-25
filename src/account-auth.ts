@@ -5,10 +5,16 @@ export const ACCOUNT_SSO_COOKIE = "__Secure-jihuayu_sso";
 
 export interface AccountSessionUser {
   sub: string;
-  handle: string;
-  displayName: string;
-  avatarUrl: string;
-  email: string;
+  username?: string;
+  preferred_username?: string;
+  handle?: string;
+  displayName?: string;
+  display_name?: string;
+  name?: string;
+  avatarUrl?: string;
+  avatar_url?: string;
+  picture?: string;
+  email?: string;
 }
 
 interface AccountIntrospectionResponse {
@@ -59,6 +65,18 @@ export async function introspectAccountCookie(ctx: AppContext, cookieHeader: str
   }
   if (!payload.active || !payload.user?.sub) return null;
   return payload.user;
+}
+
+export function accountSessionDisplayName(user: AccountSessionUser): string {
+  return firstPresent(user.displayName, user.display_name, user.name, user.email) || `account-${user.sub}`;
+}
+
+export function accountSessionAvatarUrl(user: AccountSessionUser): string {
+  return firstPresent(user.avatarUrl, user.avatar_url, user.picture) || "";
+}
+
+function firstPresent(...values: Array<string | undefined>): string {
+  return values.map((value) => value?.trim()).find((value): value is string => Boolean(value)) ?? "";
 }
 
 function hasAccountSsoCookie(cookieHeader: string | null | undefined): boolean {
