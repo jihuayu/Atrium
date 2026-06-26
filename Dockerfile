@@ -12,6 +12,5 @@ LABEL org.opencontainers.image.title="Atrium" \
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/atrium-server /usr/local/bin/
 COPY --from=builder /app/LICENSE /licenses/LICENSE
-VOLUME ["/data"]
 EXPOSE 3000
 CMD ["atrium-server"]
