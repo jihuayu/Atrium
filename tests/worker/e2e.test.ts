@@ -164,6 +164,12 @@ describe("Atrium native Worker API", () => {
     const commentBody = await json(comment);
     const commentId = commentBody.id;
     expect(commentBody.author).toMatchObject({ id: 3, login: "alice", display_name: "alice", is_website_admin: false });
+    expect(commentBody).toMatchObject({
+      website_key: "explicit-blog",
+      page_key: "post-1",
+      can_delete: true,
+      can_ban: false
+    });
     expect(commentBody.author).not.toHaveProperty("email");
 
     const adminComment = await owner.post("/api/v1/websites/explicit-blog/pages/post-1/comments", { body: "admin note" });
@@ -184,10 +190,36 @@ describe("Atrium native Worker API", () => {
     expect(roots.status).toBe(200);
     const rootComments = await json(roots);
     expect(rootComments.data.map((item: any) => item.id)).toContain(commentId);
-    expect(rootComments.data.find((item: any) => item.id === commentId).author).not.toHaveProperty("email");
+    const anonAliceRoot = rootComments.data.find((item: any) => item.id === commentId);
+    expect(anonAliceRoot).toMatchObject({
+      website_key: "explicit-blog",
+      page_key: "post-1",
+      can_delete: false,
+      can_ban: false
+    });
+    expect(anonAliceRoot.author).not.toHaveProperty("email");
     expect(rootComments.data.find((item: any) => item.id === adminCommentBody.id).author).toMatchObject({
       id: 2,
       is_website_admin: true
+    });
+
+    const ownerRoots = await owner.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
+    expect(ownerRoots.status).toBe(200);
+    expect((await json(ownerRoots)).data.find((item: any) => item.id === commentId)).toMatchObject({
+      can_delete: true,
+      can_ban: true
+    });
+
+    const aliceRoots = await alice.get("/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=root");
+    expect(aliceRoots.status).toBe(200);
+    const aliceRootsBody = await json(aliceRoots);
+    expect(aliceRootsBody.data.find((item: any) => item.id === commentId)).toMatchObject({
+      can_delete: true,
+      can_ban: false
+    });
+    expect(aliceRootsBody.data.find((item: any) => item.id === adminCommentBody.id)).toMatchObject({
+      can_delete: false,
+      can_ban: false
     });
 
     const replies = await anon.get(`/api/v1/websites/explicit-blog/pages/post-1/comments?parent_id=${commentId}`);
@@ -294,7 +326,14 @@ describe("Atrium native Worker API", () => {
 
     const quickComment = await alice.post("/api/v1/comments/current", { body: "quick" }, { Referer: referer });
     expect(quickComment.status).toBe(201);
-    const quickCommentId = (await json(quickComment)).id;
+    const quickCommentBody = await json(quickComment);
+    const quickCommentId = quickCommentBody.id;
+    expect(quickCommentBody).toMatchObject({
+      website_key: "quick-blog",
+      can_delete: true,
+      can_ban: false
+    });
+    expect(quickCommentBody.page_key).toMatch(/^url-/);
 
     const quickReply = await bob.post("/api/v1/comments/current", { body: "quick reply", parent_id: quickCommentId }, { Referer: referer });
     expect(quickReply.status).toBe(201);
@@ -310,13 +349,32 @@ describe("Atrium native Worker API", () => {
 
     const flatReplies = await anon.get(`/api/v1/comments/current/replies?comment_id=${quickCommentId}&thread=flat`, { Referer: referer });
     expect(flatReplies.status).toBe(200);
-    expect((await json(flatReplies)).data.map((item: any) => item.id)).toEqual([quickReplyId, quickNestedReplyId]);
+    const flatRepliesBody = await json(flatReplies);
+    expect(flatRepliesBody.data.map((item: any) => item.id)).toEqual([quickReplyId, quickNestedReplyId]);
+    expect(flatRepliesBody.data[0]).toMatchObject({
+      website_key: "quick-blog",
+      can_delete: false,
+      can_ban: false
+    });
+
+    const ownerCurrent = await owner.get("/api/v1/comments/current", { Referer: referer });
+    expect(ownerCurrent.status).toBe(200);
+    expect((await json(ownerCurrent)).data.find((item: any) => item.id === quickCommentId)).toMatchObject({
+      can_delete: true,
+      can_ban: true
+    });
 
     const reaction = await bob.put(`/api/v1/comments/current/${quickCommentId}/reactions/like`, undefined, { Referer: referer });
     expect(reaction.status).toBe(200);
     expect((await json(reaction)).like).toBe(1);
 
     expect((await owner.post("/api/v1/websites/quick-blog/bans", { user_id: 3, reason: "quick spam" })).status).toBe(201);
+    const ownerAfterBan = await owner.get("/api/v1/comments/current", { Referer: referer });
+    expect(ownerAfterBan.status).toBe(200);
+    expect((await json(ownerAfterBan)).data.find((item: any) => item.id === quickCommentId)).toMatchObject({
+      can_delete: true,
+      can_ban: false
+    });
     expect((await alice.post("/api/v1/comments/current", { body: "blocked" }, { Referer: referer })).status).toBe(403);
     expect((await alice.put(`/api/v1/comments/current/${quickCommentId}/reactions/heart`, undefined, { Referer: referer })).status).toBe(403);
     expect((await anon.get("/api/v1/comments/current", { Referer: referer })).status).toBe(200);

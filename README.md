@@ -68,7 +68,7 @@ For frontend widgets, quick mode resolves website and page from the HTTP `Refere
 - `GET /api/v1/comments/current/replies?comment_id=...`
 - `PUT|DELETE /api/v1/comments/current/{commentId}/reactions/{content}`
 
-Quick mode matches the website from the `Referer` origin and derives the current page key from the normalized URL. Read endpoints return comment pagination directly and do not create or update page records; posting a comment creates the page if it does not already exist. If the origin is unknown, Atrium attempts site discovery from `https://<host>/.well-known/atrium.json`, then from `_atrium.<host>` TXT records. Either source uses the same flat JSON metadata:
+Quick mode matches the website from the `Referer` origin and derives the current page key from the normalized URL. Read endpoints return comment pagination directly and do not create or update page records; comment objects include `website_key`, `page_key`, `can_delete`, and `can_ban` for the current viewer. Posting a comment creates the page if it does not already exist. If the origin is unknown, Atrium attempts site discovery from `https://<host>/.well-known/atrium.json`, then from `_atrium.<host>` TXT records. Either source uses the same flat JSON metadata:
 
 ```json
 {

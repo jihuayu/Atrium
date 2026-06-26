@@ -22,7 +22,7 @@ import {
 const ALLOWED_REACTIONS = new Set(["like", "dislike", "heart", "laugh", "hooray", "confused", "rocket", "eyes"]);
 const ACCOUNT_PROFILE_REFRESH_TTL_SECONDS = 24 * 60 * 60;
 const COMMENT_ROW_COLUMNS =
-  "c.id, c.website_id, c.page_id, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin";
+  "c.id, c.website_id, c.page_id, c.parent_comment_id, c.body, c.user_id, c.created_at, c.updated_at, c.deleted_at, c.reactions, COALESCE(NULLIF(u.display_name, ''), u.login) AS login, COALESCE(NULLIF(u.display_name, ''), u.login) AS display_name, u.avatar_url, EXISTS(SELECT 1 FROM website_admins wa WHERE wa.website_id = c.website_id AND wa.user_id = c.user_id) AS author_is_website_admin, EXISTS(SELECT 1 FROM website_bans wb WHERE wb.website_id = c.website_id AND wb.user_id = c.user_id AND wb.unbanned_at IS NULL) AS author_is_banned";
 const COMMENT_ROW_FROM = "FROM comments c JOIN users u ON u.id = c.user_id";
 const PUBLIC_COMMENT_VISIBILITY_FILTER =
   "(c.deleted_at IS NULL OR (c.parent_comment_id IS NULL AND EXISTS (SELECT 1 FROM comments child WHERE child.website_id = c.website_id AND child.page_id = c.page_id AND child.parent_comment_id = c.id)))";
@@ -53,6 +53,14 @@ interface CommentRow {
   display_name: string;
   avatar_url: string;
   author_is_website_admin: number;
+  author_is_banned: number;
+}
+
+interface CommentResponseContext {
+  website: WebsiteRow;
+  page?: PageRow | null;
+  actorId?: number;
+  actorCanModerate: boolean;
 }
 
 interface RefererResolution {
@@ -334,6 +342,16 @@ async function isWebsiteAdminOrSuperAdmin(ctx: AppContext, websiteId: number, us
     [websiteId, userId]
   );
   return !!hit;
+}
+
+async function commentResponseContext(ctx: AppContext, website: WebsiteRow, page?: PageRow | null): Promise<CommentResponseContext> {
+  const actor = ctx.user;
+  return {
+    website,
+    page,
+    actorId: actor?.id,
+    actorCanModerate: actor ? await isWebsiteAdminOrSuperAdmin(ctx, website.id, actor.id) : false
+  };
 }
 
 export async function requireNotWebsiteBanned(ctx: AppContext, websiteId: number): Promise<void> {
@@ -635,7 +653,7 @@ async function createCommentForPage(ctx: AppContext, website: WebsiteRow, page: 
   );
   if (!row) throw ApiError.internal("comment insert failed");
   await ctx.db.execute("UPDATE pages SET comment_count = comment_count + 1, updated_at = datetime('now') WHERE id = ?1", [page.id]);
-  return commentResponse(await getCommentRow(ctx, website.id, row.id));
+  return commentResponse(await getCommentRow(ctx, website.id, row.id), await commentResponseContext(ctx, website, page));
 }
 
 export async function listPageComments(ctx: AppContext, websiteKey: string, pageKey: string, query: URLSearchParams) {
@@ -655,7 +673,7 @@ export async function updateComment(ctx: AppContext, websiteKey: string, comment
   const body = String(input.body ?? "");
   if (!body.trim()) throw ApiError.validation("Comment", "body", "missing_field");
   await ctx.db.execute("UPDATE comments SET body = ?1, updated_at = datetime('now') WHERE id = ?2 AND website_id = ?3", [body, commentId, website.id]);
-  return commentResponse(await getCommentRow(ctx, website.id, commentId));
+  return commentResponse(await getCommentRow(ctx, website.id, commentId), await commentResponseContext(ctx, website));
 }
 
 export async function deleteComment(ctx: AppContext, websiteKey: string, commentId: number): Promise<void> {
@@ -737,7 +755,8 @@ export async function listModerationComments(ctx: AppContext, websiteKey: string
   );
   const hasMore = rows.length > limit;
   if (hasMore) rows.pop();
-  return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
+  const responseContext = await commentResponseContext(ctx, website);
+  return cursorPage(rows.map((row) => commentResponse(row, responseContext)), hasMore, rows.at(-1)?.id ?? null);
 }
 
 export async function banWebsiteUser(ctx: AppContext, websiteKey: string, input: any) {
@@ -1043,6 +1062,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
   const order = query.get("order")?.toLowerCase() === "desc" ? "DESC" : "ASC";
   const cursorId = query.get("cursor") ? decodeCursor(query.get("cursor")!) : null;
   const flatThread = query.get("thread") === "flat";
+  const responseContext = await commentResponseContext(ctx, website, page);
   const filters = ["c.website_id = ?1", "c.page_id = ?2", PUBLIC_COMMENT_VISIBILITY_FILTER];
   const params: any[] = [website.id, page.id];
   let idx = 3;
@@ -1071,7 +1091,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
       );
       const hasMore = rows.length > limit;
       if (hasMore) rows.pop();
-      return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
+      return cursorPage(rows.map((row) => commentResponse(row, responseContext)), hasMore, rows.at(-1)?.id ?? null);
     } else {
       filters.push(`c.parent_comment_id = ?${idx++}`);
       params.push(parentId);
@@ -1087,7 +1107,7 @@ async function listCommentsForPage(ctx: AppContext, website: WebsiteRow, page: P
   );
   const hasMore = rows.length > limit;
   if (hasMore) rows.pop();
-  return cursorPage(rows.map(commentResponse), hasMore, rows.at(-1)?.id ?? null);
+  return cursorPage(rows.map((row) => commentResponse(row, responseContext)), hasMore, rows.at(-1)?.id ?? null);
 }
 
 async function getCommentRow(ctx: AppContext, websiteId: number, commentId: number): Promise<CommentRow> {
@@ -1123,11 +1143,17 @@ async function ensureActiveCommentOnPage(ctx: AppContext, websiteId: number, pag
   if (!row) throw ApiError.notFound("Comment");
 }
 
-function commentResponse(row: CommentRow) {
+function commentResponse(row: CommentRow, context: CommentResponseContext) {
   const deleted = row.deleted_at != null;
   const reactions = deleted ? emptyReactionCounts() : parseReactionCounts(row.reactions);
+  const actorOwnsComment = context.actorId === row.user_id;
+  const authorIsBanned = row.author_is_banned === 1;
+  const canDelete = !deleted && (actorOwnsComment || context.actorCanModerate);
+  const canBan = !deleted && context.actorCanModerate && !actorOwnsComment && !authorIsBanned;
   return {
     id: row.id,
+    website_key: context.website.key,
+    ...(context.page ? { page_key: context.page.key } : {}),
     parent_id: row.parent_comment_id,
     body: deleted ? "" : row.body,
     body_html: deleted ? "" : renderMarkdown(row.body),
@@ -1140,6 +1166,8 @@ function commentResponse(row: CommentRow) {
     },
     reactions,
     deleted,
+    can_delete: canDelete,
+    can_ban: canBan,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
     deleted_at: toIso(row.deleted_at)
