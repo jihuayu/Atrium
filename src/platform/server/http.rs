@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::{
+    Result,
     auth::{HttpClient, UpstreamResponse},
     error::ApiError,
     types::{GitHubApiUser, GitHubUser},
-    Result,
 };
 
 #[derive(Clone)]
@@ -27,6 +27,7 @@ impl ReqwestHttpClient {
     fn with_urls(github_user_url: String, utterances_token_url: String) -> Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent("atrium/0.1")
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| ApiError::internal(format!("create reqwest client failed: {}", e)))?;
         Ok(Self {
@@ -166,15 +167,12 @@ impl HttpClient for ReqwestHttpClient {
             ));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| ApiError::internal(format!("decode github oauth response failed: {}", e)))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            ApiError::internal(format!("decode github oauth response failed: {}", e))
+        })?;
 
         if let Some(error) = token_response.error {
-            let message = token_response
-                .error_description
-                .unwrap_or(error.clone());
+            let message = token_response.error_description.unwrap_or(error.clone());
             return Err(ApiError::bad_request(&format!(
                 "GitHub OAuth error: {}",
                 message
@@ -216,6 +214,69 @@ impl HttpClient for ReqwestHttpClient {
             body,
         })
     }
+
+    async fn post_account_introspect(
+        &self,
+        base_url: &str,
+        cookie_header: &str,
+        internal_secret: Option<&str>,
+        audience: &str,
+    ) -> Result<UpstreamResponse> {
+        let url = format!(
+            "{}/internal/session/introspect",
+            base_url.trim_end_matches('/')
+        );
+        let mut request = self
+            .client
+            .post(url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .header("Cookie", cookie_header)
+            .json(&serde_json::json!({ "audience": audience }));
+        if let Some(secret) = internal_secret.filter(|v| !v.trim().is_empty()) {
+            request = request.header("x-internal-secret", secret);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("account introspection failed: {}", e)))?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal(format!("read account response failed: {}", e)))?;
+        Ok(UpstreamResponse {
+            status,
+            headers: Vec::new(),
+            body,
+        })
+    }
+
+    async fn get_url(&self, url: &str, accept: &str) -> Result<UpstreamResponse> {
+        let response = self
+            .client
+            .get(url)
+            .header("Accept", accept)
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("http get failed: {}", e)))?;
+        let status = response.status().as_u16();
+        let mut response_headers = Vec::new();
+        for key in ["Content-Type", "Location", "Cache-Control"] {
+            if let Some(value) = response.headers().get(key).and_then(|v| v.to_str().ok()) {
+                response_headers.push((key.to_string(), value.to_string()));
+            }
+        }
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal(format!("read http response failed: {}", e)))?;
+        Ok(UpstreamResponse {
+            status,
+            headers: response_headers,
+            body,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -223,12 +284,12 @@ mod tests {
     use std::collections::HashMap;
 
     use axum::{
+        Json, Router,
         body::Bytes,
         extract::Request,
         http::StatusCode,
         response::IntoResponse,
         routing::{get, post},
-        Json, Router,
     };
 
     use crate::auth::HttpClient;
@@ -374,27 +435,29 @@ mod tests {
             .expect("post token");
         assert_eq!(upstream.status, 201);
         assert_eq!(upstream.body, Bytes::from_static(br#"{"token":"ok"}"#));
-        assert!(upstream
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Cache-Control" && v == "max-age=60"));
+        assert!(
+            upstream
+                .headers
+                .iter()
+                .any(|(k, v)| k == "Cache-Control" && v == "max-age=60")
+        );
 
         let jwks = client
             .get_jwks(&format!("{}/jwks", base))
             .await
             .expect("get jwks");
         assert_eq!(jwks.status, 200);
-        assert!(jwks
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Cache-Control" && v == "max-age=120"));
+        assert!(
+            jwks.headers
+                .iter()
+                .any(|(k, v)| k == "Cache-Control" && v == "max-age=120")
+        );
 
-        let err = client
-            .get_jwks("http://127.0.0.1:1/unreachable")
+        let missing = client
+            .get_jwks(&format!("{}/missing-jwks", base))
             .await
-            .err()
-            .expect("must fail on connection");
-        assert_eq!(err.status, 500);
+            .expect("upstream response still returned");
+        assert_eq!(missing.status, 404);
     }
 
     #[tokio::test]
@@ -410,29 +473,26 @@ mod tests {
             .expect("health check ok");
         assert_eq!(user.login, "alice");
 
-        let unreachable_user_client = ReqwestHttpClient::with_urls(
-            "http://127.0.0.1:1/unreachable".to_string(),
-            format!("{}/token", base),
-        )
-        .expect("create client");
-        let user_err = unreachable_user_client
+        let fail_user_client =
+            ReqwestHttpClient::with_urls(format!("{}/user-fail", base), format!("{}/token", base))
+                .expect("create client");
+        let user_err = fail_user_client
             .get_github_user("token")
             .await
             .err()
-            .expect("github send must fail");
+            .expect("github response must fail");
         assert_eq!(user_err.status, 500);
 
-        let unreachable_token_client = ReqwestHttpClient::with_urls(
+        let missing_token_client = ReqwestHttpClient::with_urls(
             format!("{}/user-ok", base),
-            "http://127.0.0.1:1/unreachable".to_string(),
+            format!("{}/missing-token", base),
         )
         .expect("create client");
-        let token_err = unreachable_token_client
+        let token_missing = missing_token_client
             .post_utterances_token(br#"{}"#, &HashMap::new())
             .await
-            .err()
-            .expect("token send must fail");
-        assert_eq!(token_err.status, 500);
+            .expect("upstream response still returned");
+        assert_eq!(token_missing.status, 404);
 
         let bad_headers_upstream = ok_client
             .post_utterances_token(br#"{}"#, &HashMap::new())

@@ -12,6 +12,13 @@ struct ServerConfig {
     apple_app_id: Option<String>,
     github_client_id: Option<String>,
     github_client_secret: Option<String>,
+    account_base_url: Option<String>,
+    account_audience: Option<String>,
+    account_internal_secret: Option<String>,
+    super_admin_account_ids: Option<String>,
+    discovery_private_jwk: Option<String>,
+    discovery_public_jwk: Option<String>,
+    discovery_key_id: Option<String>,
     cors_origin: Option<String>,
 }
 
@@ -32,6 +39,13 @@ async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
         config.apple_app_id,
         config.github_client_id,
         config.github_client_secret,
+        config.account_base_url,
+        config.account_audience,
+        config.account_internal_secret,
+        config.super_admin_account_ids,
+        config.discovery_private_jwk,
+        config.discovery_public_jwk,
+        config.discovery_key_id,
         config.cors_origin,
     )
     .await
@@ -66,6 +80,11 @@ fn load_config_from_env() -> Result<ServerConfig, io::Error> {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(60),
         listen: env_with_fallback("ATRIUM_LISTEN", "XTALK_LISTEN")
+            .or_else(|| {
+                env::var("PORT")
+                    .ok()
+                    .map(|port| format!("0.0.0.0:{}", port))
+            })
             .unwrap_or_else(|| "0.0.0.0:3000".to_string()),
         jwt_secret,
         google_client_id: env_with_fallback("ATRIUM_GOOGLE_CLIENT_ID", "XTALK_GOOGLE_CLIENT_ID")
@@ -79,6 +98,26 @@ fn load_config_from_env() -> Result<ServerConfig, io::Error> {
             "XTALK_GITHUB_CLIENT_SECRET",
         )
         .filter(|v| !v.trim().is_empty()),
+        account_base_url: env_with_fallback("ACCOUNT_BASE_URL", "ACCOUNT_ISSUER")
+            .filter(|v| !v.trim().is_empty()),
+        account_audience: env::var("ACCOUNT_AUDIENCE")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        account_internal_secret: env::var("ACCOUNT_INTERNAL_SECRET")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        super_admin_account_ids: env::var("ATRIUM_SUPER_ADMIN_ACCOUNT_IDS")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        discovery_private_jwk: env::var("ATRIUM_DISCOVERY_PRIVATE_JWK")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        discovery_public_jwk: env::var("ATRIUM_DISCOVERY_PUBLIC_JWK")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        discovery_key_id: env::var("ATRIUM_DISCOVERY_KEY_ID")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
         cors_origin: env_with_fallback("ATRIUM_CORS_ORIGIN", "XTALK_CORS_ORIGIN")
             .filter(|v| !v.trim().is_empty()),
     })
@@ -103,7 +142,7 @@ mod tests {
         time::Duration,
     };
 
-    use super::{load_config_from_env, parse_secret_bytes, run, ServerConfig};
+    use super::{ServerConfig, load_config_from_env, parse_secret_bytes, run};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -128,6 +167,15 @@ mod tests {
             "ATRIUM_CORS_ORIGIN",
             "ATRIUM_GITHUB_CLIENT_ID",
             "ATRIUM_GITHUB_CLIENT_SECRET",
+            "ACCOUNT_BASE_URL",
+            "ACCOUNT_ISSUER",
+            "ACCOUNT_AUDIENCE",
+            "ACCOUNT_INTERNAL_SECRET",
+            "ATRIUM_SUPER_ADMIN_ACCOUNT_IDS",
+            "ATRIUM_DISCOVERY_PRIVATE_JWK",
+            "ATRIUM_DISCOVERY_PUBLIC_JWK",
+            "ATRIUM_DISCOVERY_KEY_ID",
+            "PORT",
             "ATRIUM_TEST_BYPASS_SECRET",
             "XTALK_BASE_URL",
             "XTALK_DATABASE_URL",
@@ -177,10 +225,13 @@ mod tests {
         let _guard = lock_env();
         clear_server_envs();
 
-        let err = load_config_from_env().err().expect("missing secret must fail");
-        assert!(err
-            .to_string()
-            .contains("ATRIUM_JWT_SECRET or XTALK_JWT_SECRET is required"));
+        let err = load_config_from_env()
+            .err()
+            .expect("missing secret must fail");
+        assert!(
+            err.to_string()
+                .contains("ATRIUM_JWT_SECRET or XTALK_JWT_SECRET is required")
+        );
     }
 
     #[test]
@@ -201,6 +252,10 @@ mod tests {
         assert_eq!(cfg.apple_app_id, None);
         assert_eq!(cfg.github_client_id, None);
         assert_eq!(cfg.github_client_secret, None);
+        assert_eq!(cfg.account_base_url, None);
+        assert_eq!(cfg.account_audience, None);
+        assert_eq!(cfg.account_internal_secret, None);
+        assert_eq!(cfg.super_admin_account_ids, None);
         assert_eq!(cfg.cors_origin, None);
     }
 
@@ -263,6 +318,13 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
             cors_origin: None,
         };
 
@@ -285,6 +347,13 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
             cors_origin: None,
         };
 

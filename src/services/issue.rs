@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
+    AppContext, Result,
     db::{self, DbValue},
     error::ApiError,
     fmt::{comment::ReactionCounts, issue as issue_fmt},
@@ -10,7 +11,6 @@ use crate::{
         CreateIssueInput, GitHubUser, IssueResponse, Label, ListIssuesQuery, RepoRow,
         UpdateIssueInput,
     },
-    AppContext, Result,
 };
 
 #[derive(Debug, Deserialize, Clone)]
@@ -71,7 +71,11 @@ pub async fn create_issue(
 
     let issue_number = counter.issue_counter;
 
-    let slug = input.slug.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let slug = input
+        .slug
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
     if let Some(slug) = slug {
         ensure_slug_available(ctx, repo.id, slug).await?;
     }
@@ -355,11 +359,7 @@ async fn fetch_issue_row(
     .await
 }
 
-async fn ensure_slug_available(
-    ctx: &AppContext<'_>,
-    repo_id: i64,
-    slug: &str,
-) -> Result<()> {
+async fn ensure_slug_available(ctx: &AppContext<'_>, repo_id: i64, slug: &str) -> Result<()> {
     #[derive(Debug, Deserialize)]
     struct HitRow {
         #[serde(rename = "hit")]
@@ -372,7 +372,10 @@ async fn ensure_slug_available(
     )
     .await?;
     if hit.is_some() {
-        return Err(ApiError::new(409, "Thread slug already exists in this repo"));
+        return Err(ApiError::new(
+            409,
+            "Thread slug already exists in this repo",
+        ));
     }
     Ok(())
 }
@@ -412,11 +415,14 @@ async fn build_issue_response(ctx: &AppContext<'_>, row: &IssueRow) -> Result<Is
     let labels = issue_labels(ctx, row.id).await?;
     let user = GitHubUser {
         id: row.user_id,
+        display_name: row.login.clone(),
         login: row.login.clone(),
         email: String::new(),
         avatar_url: row.avatar_url.clone(),
         r#type: row.user_type.clone(),
         site_admin: row.site_admin != 0,
+        account_sub: None,
+        cached_at: None,
     };
     let repo = RepoRow {
         id: row.repo_id,

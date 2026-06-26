@@ -4,6 +4,7 @@ scripts/test.py — Atrium test runner
 
 Usage:
     python scripts/test.py server
+    python scripts/test.py
     python scripts/test.py worker
     python scripts/test.py all
     python scripts/test.py worker compat_issues
@@ -80,8 +81,7 @@ def run_server_tests(extra: list[str]) -> None:
             "test",
             "--features",
             "server,test-utils",
-            "--test",
-            "integration_test",
+            "--no-fail-fast",
         ]
         + extra,
         cwd=PROJECT_ROOT,
@@ -248,7 +248,7 @@ def run_worker_tests(extra: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Atrium test runner")
     parser.add_argument(
-        "mode", nargs="?", default="all", choices=["server", "worker", "all"]
+        "mode", nargs="?", default="server", choices=["server", "worker", "all"]
     )
     parser.add_argument("extra", nargs=argparse.REMAINDER)
     args = parser.parse_args()

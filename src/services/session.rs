@@ -1,10 +1,10 @@
 use serde::Deserialize;
 
 use crate::{
+    AppContext, Result,
     auth::hash_token,
     db::{self, DbValue},
     error::ApiError,
-    AppContext, Result,
 };
 
 #[derive(Debug, Deserialize)]
@@ -114,10 +114,10 @@ mod tests {
 
     #[cfg(feature = "server")]
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::{Database, DbValue},
         types::GitHubApiUser,
-        AppContext,
     };
 
     #[test]
@@ -220,6 +220,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: true,
             test_bypass_secret: None,
         };
@@ -251,6 +260,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: true,
             test_bypass_secret: None,
         };
@@ -294,6 +312,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: true,
             test_bypass_secret: None,
         };
@@ -354,6 +381,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: true,
             test_bypass_secret: None,
         };

@@ -1,14 +1,14 @@
 use std::{path::Path, str::FromStr};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine};
+use base64::{Engine, engine::general_purpose};
 use serde_json::{Map, Value};
 use sqlx::{
-    query, query_scalar, sqlite::SqliteArguments, sqlite::SqliteConnectOptions, sqlite::SqliteRow,
-    Column, Row, SqlitePool,
+    Column, Row, SqlitePool, query, query_scalar, sqlite::SqliteArguments,
+    sqlite::SqliteConnectOptions, sqlite::SqliteRow,
 };
 
-use crate::{db::Database, db::DbValue, error::ApiError, Result};
+use crate::{Result, db::Database, db::DbValue, error::ApiError};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -257,7 +257,7 @@ impl Database for SqliteDatabase {
 mod tests {
     use super::SqliteDatabase;
     use crate::db::{Database, DbValue};
-    use sqlx::{query, query_scalar, sqlite::SqliteConnectOptions, SqlitePool};
+    use sqlx::{SqlitePool, query, query_scalar, sqlite::SqliteConnectOptions};
     use std::str::FromStr;
 
     async fn make_db() -> (tempfile::TempPath, SqliteDatabase) {
@@ -395,7 +395,9 @@ mod tests {
             .execute(&pool)
             .await
             .expect("apply migration 0001 manually");
-        query(include_str!("../../../migrations/0002_multi_provider_auth.sql"))
+        query(include_str!(
+            "../../../migrations/0002_multi_provider_auth.sql"
+        ))
         .execute(&pool)
         .await
         .expect("apply migration 0002 manually");
@@ -410,7 +412,7 @@ mod tests {
             .fetch_one(&verify_pool)
             .await
             .expect("count sqlx migrations");
-        assert_eq!(count, 4);
+        assert_eq!(count, 9);
         let v1: Option<i64> =
             query_scalar("SELECT 1 FROM _sqlx_migrations WHERE version = 1 LIMIT 1")
                 .fetch_optional(&verify_pool)

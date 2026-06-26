@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod exports;
 pub mod issue;
 pub mod label;
+pub mod native;
 pub mod reaction;
 pub mod repo;
 pub mod search;

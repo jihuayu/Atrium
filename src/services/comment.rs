@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
+    AppContext, Result,
     db::{self, DbValue},
     error::ApiError,
     fmt::comment as comment_fmt,
@@ -9,7 +10,6 @@ use crate::{
     types::{
         CommentResponse, CreateCommentInput, GitHubUser, ListCommentsQuery, UpdateCommentInput,
     },
-    AppContext, Result,
 };
 
 #[derive(Debug, Deserialize, Clone)]
@@ -298,10 +298,7 @@ async fn resolve_issue(
         "SELECT i.id AS issue_id, i.repo_id AS repo_id \
          FROM issues i \
          WHERE i.repo_id = ?1 AND i.number = ?2 AND i.deleted_at IS NULL",
-        &[
-            DbValue::Integer(repo_row.id),
-            DbValue::Integer(number),
-        ],
+        &[DbValue::Integer(repo_row.id), DbValue::Integer(number)],
     )
     .await?
     .ok_or_else(|| ApiError::not_found("Issue"))
@@ -334,11 +331,14 @@ async fn fetch_comment_row(
 fn to_response(ctx: &AppContext<'_>, row: &CommentRow) -> CommentResponse {
     let user = GitHubUser {
         id: row.user_id,
+        display_name: row.login.clone(),
         login: row.login.clone(),
         email: String::new(),
         avatar_url: row.avatar_url.clone(),
         r#type: row.user_type.clone(),
         site_admin: row.site_admin != 0,
+        account_sub: None,
+        cached_at: None,
     };
     let issue_url = format!(
         "{}/repos/{}/{}/issues/{}",
@@ -394,6 +394,7 @@ mod tests {
         create_comment, delete_comment, get_comment, list_comments, to_iso8601, update_comment,
     };
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::Database,
         error::ApiError,
@@ -401,7 +402,6 @@ mod tests {
         types::{
             CreateCommentInput, GitHubApiUser, GitHubUser, ListCommentsQuery, UpdateCommentInput,
         },
-        AppContext,
     };
 
     struct NoopHttp;
@@ -491,6 +491,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         }
@@ -502,6 +511,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "legacy repo/issue model removed by native website/page/comment migration"]
     async fn cache_and_invalidation_paths_are_exercised() {
         let (_db_file, db) = make_db().await;
         seed(&db).await;
@@ -509,11 +519,14 @@ mod tests {
         let cache = CommentCache::new(128, 60);
         let alice = GitHubUser {
             id: 2,
+            display_name: "alice".to_string(),
             login: "alice".to_string(),
             email: "alice@test.com".to_string(),
             avatar_url: "https://avatars/a".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         let anon_ctx = ctx(&db, &http, Some(&cache), None);

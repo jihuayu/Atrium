@@ -15,11 +15,17 @@ pub struct GitHubApiUser {
 pub struct GitHubUser {
     pub id: i64,
     pub login: String,
+    #[serde(default)]
+    pub display_name: String,
     pub email: String,
     pub avatar_url: String,
     #[serde(rename = "type")]
     pub r#type: String,
     pub site_admin: bool,
+    #[serde(default)]
+    pub account_sub: Option<String>,
+    #[serde(default)]
+    pub cached_at: Option<String>,
 }
 
 impl From<GitHubApiUser> for GitHubUser {
@@ -27,10 +33,13 @@ impl From<GitHubApiUser> for GitHubUser {
         Self {
             id: value.id,
             login: value.login,
+            display_name: String::new(),
             email: value.email.unwrap_or_default(),
             avatar_url: value.avatar_url,
             r#type: value.r#type,
             site_admin: value.site_admin,
+            account_sub: None,
+            cached_at: None,
         }
     }
 }
@@ -263,6 +272,7 @@ pub struct AuthTokenResponse {
 pub struct NativeUser {
     pub id: i64,
     pub login: String,
+    pub display_name: String,
     pub avatar_url: String,
     pub email: String,
 }

@@ -1,13 +1,13 @@
 use serde::Deserialize;
 
 use crate::{
+    AppContext, Result,
     auth::hash_token,
     db::{self, DbValue},
     error::ApiError,
     jwt,
     services::session,
     types::{AuthTokenResponse, GitHubUser, JwtClaims, NativeUser, ProviderUser},
-    AppContext, Result,
 };
 
 const ACCESS_TTL_SECS: i64 = 3600;
@@ -149,7 +149,16 @@ pub async fn issue_xtalk_jwt(ctx: &AppContext<'_>, user: &GitHubUser) -> Result<
         token_type: "Bearer".to_string(),
         user: NativeUser {
             id: user.id,
-            login: user.login.clone(),
+            login: if user.display_name.is_empty() {
+                user.login.clone()
+            } else {
+                user.display_name.clone()
+            },
+            display_name: if user.display_name.is_empty() {
+                user.login.clone()
+            } else {
+                user.display_name.clone()
+            },
             avatar_url: user.avatar_url.clone(),
             email: user.email.clone(),
         },
@@ -221,11 +230,14 @@ async fn allocate_login(ctx: &AppContext<'_>, preferred: &str) -> Result<String>
 fn to_user(row: UserRow) -> GitHubUser {
     GitHubUser {
         id: row.id,
+        display_name: row.login.clone(),
         login: row.login,
         email: row.email,
         avatar_url: row.avatar_url,
         r#type: row.r#type,
         site_admin: row.site_admin != 0,
+        account_sub: None,
+        cached_at: None,
     }
 }
 
@@ -267,11 +279,11 @@ mod tests {
         revoke_current_session,
     };
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::{self, Database, DbValue},
         error::ApiError,
         types::{GitHubApiUser, GitHubUser, ProviderUser},
-        AppContext,
     };
 
     async fn make_db() -> (
@@ -346,6 +358,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: stateful,
             test_bypass_secret: None,
         }
@@ -468,11 +489,14 @@ mod tests {
 
         let user = GitHubUser {
             id: 11,
+            display_name: "alice".to_string(),
             login: "alice".to_string(),
             email: "alice@test.com".to_string(),
             avatar_url: "https://avatars/a".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         let issued = issue_xtalk_jwt(&app_ctx, &user).await.expect("issue");
@@ -500,11 +524,14 @@ mod tests {
 
         let user = GitHubUser {
             id: 12,
+            display_name: "bob".to_string(),
             login: "bob".to_string(),
             email: "bob@test.com".to_string(),
             avatar_url: "https://avatars/b".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         let stateful_ctx = ctx(&db, &http, &secret, true);

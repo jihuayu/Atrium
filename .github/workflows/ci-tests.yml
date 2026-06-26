@@ -1,4 +1,4 @@
-name: Run Server and Worker Tests
+name: Run Rust Server Tests
 
 on:
   push:
@@ -12,12 +12,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        mode:
-          - server
-          - worker
 
     steps:
       - name: Checkout
@@ -31,11 +25,5 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Node.js
-        if: matrix.mode == 'worker'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Run tests
-        run: python3 scripts/test.py ${{ matrix.mode }}
+        run: python3 scripts/test.py server

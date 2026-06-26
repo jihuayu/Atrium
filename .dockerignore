@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+.wrangler
+deploy/worker/.wrangler
+node_modules
+target
+coverage
+*.db
+*.sqlite
+*.sqlite3
+*.log

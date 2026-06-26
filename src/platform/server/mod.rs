@@ -5,20 +5,22 @@ pub mod sqlite;
 use std::sync::Arc;
 
 use axum::{
-    body::{to_bytes, Body},
-    extract::State,
-    http::{header, HeaderMap, HeaderName, HeaderValue, Request as HttpRequest, StatusCode},
-    response::Response,
     Router,
+    body::{Body, to_bytes},
+    extract::State,
+    http::{
+        HeaderMap, HeaderName, HeaderValue, Method, Request as HttpRequest, StatusCode, header,
+    },
+    response::Response,
 };
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
-    cookies,
-    router::{parse_query_string, AppRequest, AppResponse, AppRouter},
-    types::GitHubUser,
     ApiError, AppContext, Result,
+    auth::{bearer_from_header, resolve_github_user},
+    router::{AppRequest, AppResponse, AppRouter, parse_query_string},
+    services,
+    types::GitHubUser,
 };
 
 use self::{cache::CommentCache, http::ReqwestHttpClient, sqlite::SqliteDatabase};
@@ -36,6 +38,15 @@ pub struct AppState {
     pub apple_app_id: Option<String>,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
+    pub account_base_url: Option<String>,
+    pub account_audience: Option<String>,
+    pub account_internal_secret: Option<String>,
+    pub super_admin_account_ids: Option<String>,
+    pub discovery_private_jwk: Option<String>,
+    pub discovery_public_jwk: Option<String>,
+    pub discovery_key_id: Option<String>,
+    pub test_discovery_well_known: Option<String>,
+    pub test_discovery_dns_txt: Option<String>,
     pub test_bypass_secret: Option<String>,
     pub cors_origin: Option<String>,
 }
@@ -51,6 +62,13 @@ pub async fn build_app(
     apple_app_id: Option<String>,
     github_client_id: Option<String>,
     github_client_secret: Option<String>,
+    account_base_url: Option<String>,
+    account_audience: Option<String>,
+    account_internal_secret: Option<String>,
+    super_admin_account_ids: Option<String>,
+    discovery_private_jwk: Option<String>,
+    discovery_public_jwk: Option<String>,
+    discovery_key_id: Option<String>,
     cors_origin: Option<String>,
 ) -> Result<Router> {
     let db = Arc::new(SqliteDatabase::connect_and_migrate(database_url).await?);
@@ -69,6 +87,19 @@ pub async fn build_app(
         apple_app_id,
         github_client_id,
         github_client_secret,
+        account_base_url,
+        account_audience,
+        account_internal_secret,
+        super_admin_account_ids,
+        discovery_private_jwk,
+        discovery_public_jwk,
+        discovery_key_id,
+        test_discovery_well_known: std::env::var("ATRIUM_TEST_DISCOVERY_WELL_KNOWN")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        test_discovery_dns_txt: std::env::var("ATRIUM_TEST_DISCOVERY_DNS_TXT")
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
         test_bypass_secret: std::env::var("ATRIUM_TEST_BYPASS_SECRET")
             .or_else(|_| std::env::var("XTALK_TEST_BYPASS_SECRET"))
             .ok()
@@ -89,7 +120,16 @@ pub async fn build_app(
 }
 
 fn build_cors_layer(cors_origin: &Option<String>) -> CorsLayer {
-    let layer = CorsLayer::new().allow_methods(Any).allow_headers(Any);
+    let layer = CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT]);
     if let Some(origin) = cors_origin {
         if let Ok(value) = axum::http::HeaderValue::from_str(origin) {
             return layer.allow_origin(value).allow_credentials(true);
@@ -154,6 +194,15 @@ async fn dispatch_inner(state: AppState, req: HttpRequest<Body>) -> Result<Respo
         apple_app_id: state.apple_app_id.as_deref(),
         github_client_id: state.github_client_id.as_deref(),
         github_client_secret: state.github_client_secret.as_deref(),
+        account_base_url: state.account_base_url.as_deref(),
+        account_audience: state.account_audience.as_deref(),
+        account_internal_secret: state.account_internal_secret.as_deref(),
+        super_admin_account_ids: state.super_admin_account_ids.as_deref(),
+        discovery_private_jwk: state.discovery_private_jwk.as_deref(),
+        discovery_public_jwk: state.discovery_public_jwk.as_deref(),
+        discovery_key_id: state.discovery_key_id.as_deref(),
+        test_discovery_well_known: state.test_discovery_well_known.as_deref(),
+        test_discovery_dns_txt: state.test_discovery_dns_txt.as_deref(),
         stateful_sessions: true,
         test_bypass_secret: state.test_bypass_secret.as_deref(),
     };
@@ -173,33 +222,64 @@ async fn resolve_request_user(
         if let Some(user) =
             crate::auth::try_test_bypass(header, state.test_bypass_secret.as_deref())
         {
-            crate::auth::upsert_auth_user(state.db.as_ref(), &user).await?;
+            let ctx = AppContext {
+                db: state.db.as_ref(),
+                http: state.http.as_ref(),
+                comment_cache: Some(state.cache.as_ref()),
+                base_url: &state.base_url,
+                user: Some(&user),
+                jwt_secret: &state.jwt_secret,
+                google_client_id: state.google_client_id.as_deref(),
+                apple_app_id: state.apple_app_id.as_deref(),
+                github_client_id: state.github_client_id.as_deref(),
+                github_client_secret: state.github_client_secret.as_deref(),
+                account_base_url: state.account_base_url.as_deref(),
+                account_audience: state.account_audience.as_deref(),
+                account_internal_secret: state.account_internal_secret.as_deref(),
+                super_admin_account_ids: state.super_admin_account_ids.as_deref(),
+                discovery_private_jwk: state.discovery_private_jwk.as_deref(),
+                discovery_public_jwk: state.discovery_public_jwk.as_deref(),
+                discovery_key_id: state.discovery_key_id.as_deref(),
+                test_discovery_well_known: state.test_discovery_well_known.as_deref(),
+                test_discovery_dns_txt: state.test_discovery_dns_txt.as_deref(),
+                stateful_sessions: true,
+                test_bypass_secret: state.test_bypass_secret.as_deref(),
+            };
+            services::native::upsert_auth_user(&ctx, &user).await?;
             return Ok(Some(user));
         }
     }
 
-    if path.starts_with("/api/v1/auth/") {
+    if path.starts_with("/api/v1/auth/refresh") || path.ends_with("/authorize") {
         return Ok(None);
     }
 
     if path.starts_with("/api/v1/") {
-        if let Some(user) =
-            resolve_xtalk_jwt_user(state.db.as_ref(), auth_header, &state.jwt_secret).await?
-        {
-            return Ok(Some(user));
-        }
-        if let Some(cookie_header) = cookie_header {
-            if let Some(access) = cookies::cookie_value(cookie_header, cookies::ACCESS_COOKIE) {
-                let synthetic = format!("Bearer {}", access);
-                return resolve_xtalk_jwt_user(
-                    state.db.as_ref(),
-                    Some(&synthetic),
-                    &state.jwt_secret,
-                )
-                .await;
-            }
-        }
-        return Ok(None);
+        let ctx = AppContext {
+            db: state.db.as_ref(),
+            http: state.http.as_ref(),
+            comment_cache: Some(state.cache.as_ref()),
+            base_url: &state.base_url,
+            user: None,
+            jwt_secret: &state.jwt_secret,
+            google_client_id: state.google_client_id.as_deref(),
+            apple_app_id: state.apple_app_id.as_deref(),
+            github_client_id: state.github_client_id.as_deref(),
+            github_client_secret: state.github_client_secret.as_deref(),
+            account_base_url: state.account_base_url.as_deref(),
+            account_audience: state.account_audience.as_deref(),
+            account_internal_secret: state.account_internal_secret.as_deref(),
+            super_admin_account_ids: state.super_admin_account_ids.as_deref(),
+            discovery_private_jwk: state.discovery_private_jwk.as_deref(),
+            discovery_public_jwk: state.discovery_public_jwk.as_deref(),
+            discovery_key_id: state.discovery_key_id.as_deref(),
+            test_discovery_well_known: state.test_discovery_well_known.as_deref(),
+            test_discovery_dns_txt: state.test_discovery_dns_txt.as_deref(),
+            stateful_sessions: true,
+            test_bypass_secret: state.test_bypass_secret.as_deref(),
+        };
+        return services::native::resolve_native_request_user(&ctx, auth_header, cookie_header)
+            .await;
     }
 
     let token = bearer_from_header(auth_header)?;
@@ -228,7 +308,7 @@ fn to_axum_response(app: AppResponse) -> Response {
             HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(&value),
         ) {
-            response.headers_mut().insert(header_name, header_value);
+            response.headers_mut().append(header_name, header_value);
         }
     }
 
@@ -249,13 +329,14 @@ mod tests {
     use axum::{body::Body, extract::State, http::Request as HttpRequest};
 
     use super::{
-        dispatch, resolve_request_user, AppRouter, AppState, CommentCache, ReqwestHttpClient,
-        SqliteDatabase,
+        AppRouter, AppState, CommentCache, ReqwestHttpClient, SqliteDatabase, dispatch,
+        resolve_request_user,
     };
     use crate::{
+        AppContext,
         auth::hash_token,
         db::{Database, DbValue},
-        types::GitHubUser, AppContext,
+        types::GitHubUser,
     };
 
     async fn make_db() -> (tempfile::TempPath, Arc<SqliteDatabase>) {
@@ -284,6 +365,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: Some("admin@test.com".to_string()),
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             test_bypass_secret: None,
             cors_origin: None,
         };
@@ -321,11 +411,10 @@ mod tests {
             .await
             .expect("insert token cache");
 
-        let user =
-            resolve_request_user("/repos/o/r/issues", Some("Bearer gh-token"), None, &state)
-                .await
-                .expect("resolve user")
-                .expect("has user");
+        let user = resolve_request_user("/repos/o/r/issues", Some("Bearer gh-token"), None, &state)
+            .await
+            .expect("resolve user")
+            .expect("has user");
         assert_eq!(user.login, "alice");
     }
 
@@ -352,11 +441,14 @@ mod tests {
 
         let user = GitHubUser {
             id: 88,
+            display_name: "cookieuser".to_string(),
             login: "cookieuser".to_string(),
             email: "cu@test.com".to_string(),
             avatar_url: "https://avatars/cu".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
         let ctx = AppContext {
             db: state.db.as_ref(),
@@ -369,6 +461,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };
@@ -377,18 +478,21 @@ mod tests {
             .expect("issue jwt");
 
         let cookie_header = format!("atrium_access={}", tokens.access_token);
-        let resolved =
-            resolve_request_user("/api/v1/repos/o/r/threads", None, Some(&cookie_header), &state)
-                .await
-                .expect("resolve user")
-                .expect("has user");
+        let resolved = resolve_request_user(
+            "/api/v1/repos/o/r/threads",
+            None,
+            Some(&cookie_header),
+            &state,
+        )
+        .await
+        .expect("resolve user")
+        .expect("has user");
         assert_eq!(resolved.login, "cookieuser");
 
         // No auth header and no cookie → None.
-        let none =
-            resolve_request_user("/api/v1/repos/o/r/threads", None, None, &state)
-                .await
-                .expect("resolve none");
+        let none = resolve_request_user("/api/v1/repos/o/r/threads", None, None, &state)
+            .await
+            .expect("resolve none");
         assert!(none.is_none());
     }
 

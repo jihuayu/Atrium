@@ -1,7 +1,5 @@
 use reqwest::RequestBuilder;
 
-pub mod fixtures;
-
 pub struct TestApp {
     pub base_url: String,
     pub bypass_secret: String,
@@ -84,6 +82,13 @@ impl TestApp {
             None,
             None,
             None,
+            None,
+            None,
+            Some("acct-super,admin@test.com".to_string()),
+            None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -153,6 +158,10 @@ impl AuthClient {
 
     pub fn post(&self, url: &str) -> RequestBuilder {
         self.req(|c, u| c.post(u), url)
+    }
+
+    pub fn put(&self, url: &str) -> RequestBuilder {
+        self.req(|c, u| c.put(u), url)
     }
 
     pub fn patch(&self, url: &str) -> RequestBuilder {

@@ -1,4 +1,5 @@
 use crate::{
+    ApiError, AppContext,
     auth::{bearer_from_header, resolve_github_user, resolve_xtalk_jwt_user},
     cookies,
     handlers::{body_json, query_value},
@@ -6,7 +7,6 @@ use crate::{
     router::{AppRequest, AppResponse},
     services,
     types::{AuthTokenResponse, ProviderTokenInput, RefreshTokenInput},
-    ApiError, AppContext,
 };
 
 use super::respond_native;
@@ -96,7 +96,7 @@ async fn github_callback_inner(
 
 /// Build a signed OAuth state token encoding the redirect_uri and a timestamp.
 fn build_oauth_state(ctx: &AppContext<'_>, redirect_uri: &str, user_state: &str) -> String {
-    use base64::{engine::general_purpose, Engine};
+    use base64::{Engine, engine::general_purpose};
     let now = chrono::Utc::now().timestamp();
     let payload = format!("{}|{}|{}", now, redirect_uri, user_state);
     let signature = hmac_sha256_hex(ctx.jwt_secret, &payload);
@@ -106,12 +106,12 @@ fn build_oauth_state(ctx: &AppContext<'_>, redirect_uri: &str, user_state: &str)
 
 /// Verify an OAuth state token and return the redirect_uri.
 fn verify_oauth_state(ctx: &AppContext<'_>, state_token: &str) -> crate::Result<String> {
-    use base64::{engine::general_purpose, Engine};
+    use base64::{Engine, engine::general_purpose};
     let decoded = general_purpose::URL_SAFE_NO_PAD
         .decode(state_token)
         .map_err(|_| ApiError::bad_request("invalid OAuth state"))?;
-    let combined = String::from_utf8(decoded)
-        .map_err(|_| ApiError::bad_request("invalid OAuth state"))?;
+    let combined =
+        String::from_utf8(decoded).map_err(|_| ApiError::bad_request("invalid OAuth state"))?;
     let (payload, signature) = combined
         .split_once('\n')
         .ok_or_else(|| ApiError::bad_request("invalid OAuth state format"))?;
@@ -149,7 +149,11 @@ async fn github_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     let input: ProviderTokenInput = body_json(&req)?;
     let user = resolve_github_user(ctx.db, ctx.http, &input.token, TOKEN_CACHE_TTL_SECS).await?;
     let tokens = services::auth::issue_xtalk_jwt(ctx, &user).await?;
-    Ok(with_auth_cookies(ctx, AppResponse::json(200, &tokens), &tokens))
+    Ok(with_auth_cookies(
+        ctx,
+        AppResponse::json(200, &tokens),
+        &tokens,
+    ))
 }
 
 pub async fn google(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -184,7 +188,11 @@ async fn google_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<Ap
     )
     .await?;
     let tokens = services::auth::issue_xtalk_jwt(ctx, &user).await?;
-    Ok(with_auth_cookies(ctx, AppResponse::json(200, &tokens), &tokens))
+    Ok(with_auth_cookies(
+        ctx,
+        AppResponse::json(200, &tokens),
+        &tokens,
+    ))
 }
 
 pub async fn apple(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -213,7 +221,11 @@ async fn apple_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<App
     services::auth::cache_provider_token(ctx, "apple", &input.token, user.id, TOKEN_CACHE_TTL_SECS)
         .await?;
     let tokens = services::auth::issue_xtalk_jwt(ctx, &user).await?;
-    Ok(with_auth_cookies(ctx, AppResponse::json(200, &tokens), &tokens))
+    Ok(with_auth_cookies(
+        ctx,
+        AppResponse::json(200, &tokens),
+        &tokens,
+    ))
 }
 
 pub async fn refresh(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -234,7 +246,11 @@ async fn refresh_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::Result<A
         return Err(ApiError::unauthorized());
     };
     let tokens = services::auth::refresh_xtalk_jwt(ctx, &refresh_token).await?;
-    Ok(with_auth_cookies(ctx, AppResponse::json(200, &tokens), &tokens))
+    Ok(with_auth_cookies(
+        ctx,
+        AppResponse::json(200, &tokens),
+        &tokens,
+    ))
 }
 
 pub async fn session_delete(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -260,8 +276,14 @@ async fn session_delete_inner(req: AppRequest, ctx: &AppContext<'_>) -> crate::R
     services::auth::revoke_current_session(ctx, user.id).await?;
     let secure = cookies::secure_from_base_url(ctx.base_url);
     Ok(AppResponse::no_content()
-        .with_header("Set-Cookie", &cookies::clear_cookie(cookies::ACCESS_COOKIE, secure))
-        .with_header("Set-Cookie", &cookies::clear_cookie(cookies::REFRESH_COOKIE, secure)))
+        .with_header(
+            "Set-Cookie",
+            &cookies::clear_cookie(cookies::ACCESS_COOKIE, secure),
+        )
+        .with_header(
+            "Set-Cookie",
+            &cookies::clear_cookie(cookies::REFRESH_COOKIE, secure),
+        ))
 }
 
 /// Attach `Set-Cookie` headers for the access and refresh tokens to a response.
@@ -273,7 +295,12 @@ fn with_auth_cookies(
     let secure = cookies::secure_from_base_url(ctx.base_url);
     response = response.with_header(
         "Set-Cookie",
-        &cookies::build_set_cookie(cookies::ACCESS_COOKIE, &tokens.access_token, tokens.expires_in, secure),
+        &cookies::build_set_cookie(
+            cookies::ACCESS_COOKIE,
+            &tokens.access_token,
+            tokens.expires_in,
+            secure,
+        ),
     );
     response = response.with_header(
         "Set-Cookie",
@@ -323,12 +350,12 @@ mod tests {
         verify_oauth_state,
     };
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::Database,
         error::ApiError,
         router::AppRequest,
         types::{GitHubApiUser, GitHubUser},
-        AppContext,
     };
 
     struct MockHttp;
@@ -406,6 +433,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         }
@@ -433,11 +469,14 @@ mod tests {
 
         let user = GitHubUser {
             id: 77,
+            display_name: "gh-user".to_string(),
             login: "gh-user".to_string(),
             email: "gh@test.com".to_string(),
             avatar_url: "https://avatars/gh".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         let refresh_header_req = req(
@@ -494,7 +533,10 @@ mod tests {
         let app_ctx = ctx(&db, &http, None);
 
         let mut q = HashMap::new();
-        q.insert("redirect_uri".to_string(), "https://app.example/cb".to_string());
+        q.insert(
+            "redirect_uri".to_string(),
+            "https://app.example/cb".to_string(),
+        );
         let req = AppRequest {
             method: "GET".to_string(),
             path: "/api/v1/auth/github/authorize".to_string(),
@@ -524,12 +566,24 @@ mod tests {
             apple_app_id: None,
             github_client_id: Some("gh-client-id"),
             github_client_secret: Some("gh-secret"),
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };
 
         let mut q = HashMap::new();
-        q.insert("redirect_uri".to_string(), "https://app.example/cb".to_string());
+        q.insert(
+            "redirect_uri".to_string(),
+            "https://app.example/cb".to_string(),
+        );
         let req = AppRequest {
             method: "GET".to_string(),
             path: "/api/v1/auth/github/authorize".to_string(),
@@ -628,11 +682,14 @@ mod tests {
 
         let user = GitHubUser {
             id: 77,
+            display_name: "gh-user".to_string(),
             login: "gh-user".to_string(),
             email: "gh@test.com".to_string(),
             avatar_url: "https://avatars/gh".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         let user_ctx = ctx(&db, &http, Some(&user));
@@ -646,8 +703,16 @@ mod tests {
             .map(|(_, v)| v)
             .collect();
         assert_eq!(clear_cookies.len(), 2);
-        assert!(clear_cookies.iter().any(|v| v.starts_with("atrium_access=") && v.contains("Max-Age=0")));
-        assert!(clear_cookies.iter().any(|v| v.starts_with("atrium_refresh=") && v.contains("Max-Age=0")));
+        assert!(
+            clear_cookies
+                .iter()
+                .any(|v| v.starts_with("atrium_access=") && v.contains("Max-Age=0"))
+        );
+        assert!(
+            clear_cookies
+                .iter()
+                .any(|v| v.starts_with("atrium_refresh=") && v.contains("Max-Age=0"))
+        );
     }
 
     #[tokio::test]
@@ -666,6 +731,15 @@ mod tests {
             apple_app_id: Some("apple-client"),
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };

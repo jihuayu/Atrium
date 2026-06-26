@@ -4,12 +4,12 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::{
+    Result,
     db::{self, Database, DbValue},
     error::ApiError,
     jwt,
     types::GitHubApiUser,
     types::GitHubUser,
-    Result,
 };
 
 #[cfg_attr(feature = "server", async_trait)]
@@ -22,6 +22,24 @@ pub trait HttpClient: Send + Sync {
         body: &[u8],
         headers: &HashMap<String, String>,
     ) -> Result<UpstreamResponse>;
+
+    async fn post_account_introspect(
+        &self,
+        _base_url: &str,
+        _cookie_header: &str,
+        _internal_secret: Option<&str>,
+        _audience: &str,
+    ) -> Result<UpstreamResponse> {
+        Err(ApiError::internal(
+            "account introspection is not configured for this http client",
+        ))
+    }
+
+    async fn get_url(&self, _url: &str, _accept: &str) -> Result<UpstreamResponse> {
+        Err(ApiError::internal(
+            "generic http get is not configured for this http client",
+        ))
+    }
     /// Exchange a GitHub OAuth authorization code for a GitHub access token.
     ///
     /// Returns the raw GitHub access token string on success. The default
@@ -78,11 +96,14 @@ impl From<CachedUser> for GitHubUser {
     fn from(value: CachedUser) -> Self {
         Self {
             id: value.id,
+            display_name: value.login.clone(),
             login: value.login,
             email: value.email,
             avatar_url: value.avatar_url,
             r#type: value.r#type,
             site_admin: value.site_admin != 0,
+            account_sub: None,
+            cached_at: None,
         }
     }
 }
@@ -351,7 +372,7 @@ pub fn try_test_bypass(
 ) -> Option<crate::types::AuthUser> {
     let bypass_secret = bypass_secret?;
     let rest = auth_header.strip_prefix("testuser ")?;
-    let mut parts = rest.splitn(4, ':');
+    let mut parts = rest.splitn(5, ':');
     let secret = parts.next()?;
     if secret != bypass_secret {
         return None;
@@ -360,28 +381,40 @@ pub fn try_test_bypass(
     let id = parts.next()?.parse::<i64>().ok()?;
     let login = parts.next()?.to_string();
     let email = parts.next().unwrap_or("").to_string();
+    let account_sub = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     Some(crate::types::AuthUser {
         id,
+        display_name: login.clone(),
         login,
         email,
         avatar_url: format!("https://avatars.githubusercontent.com/u/{}?v=4", id),
         r#type: "User".to_string(),
         site_admin: false,
+        account_sub,
+        cached_at: Some(chrono::Utc::now().to_rfc3339()),
     })
 }
 
 #[cfg(any(feature = "test-utils", feature = "worker"))]
 pub async fn upsert_auth_user(db: &dyn Database, user: &crate::types::AuthUser) -> Result<()> {
     db.execute(
-        "INSERT INTO users (id, login, email, avatar_url, type, site_admin, cached_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now')) \
+        "INSERT INTO users (id, login, display_name, email, avatar_url, type, site_admin, cached_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now')) \
          ON CONFLICT(id) DO UPDATE SET \
-         login = excluded.login, email = excluded.email, avatar_url = excluded.avatar_url, \
+         login = excluded.login, display_name = excluded.display_name, email = excluded.email, avatar_url = excluded.avatar_url, \
          type = excluded.type, site_admin = excluded.site_admin, cached_at = datetime('now')",
         &[
             DbValue::Integer(user.id),
             DbValue::Text(user.login.clone()),
+            DbValue::Text(if user.display_name.is_empty() {
+                user.login.clone()
+            } else {
+                user.display_name.clone()
+            }),
             DbValue::Text(user.email.clone()),
             DbValue::Text(user.avatar_url.clone()),
             DbValue::Text(user.r#type.clone()),
@@ -421,7 +454,7 @@ mod tests {
     use serde::Deserialize;
 
     #[cfg(feature = "server")]
-    use super::{resolve_github_user, resolve_xtalk_jwt_user, HttpClient, UpstreamResponse};
+    use super::{HttpClient, UpstreamResponse, resolve_github_user, resolve_xtalk_jwt_user};
     #[cfg(all(feature = "server", any(feature = "test-utils", feature = "worker")))]
     use crate::types::AuthUser;
     #[cfg(feature = "server")]
@@ -544,11 +577,14 @@ mod tests {
         let (_db_file, db) = make_db().await;
         let user = AuthUser {
             id: 100,
+            display_name: "alice".to_string(),
             login: "alice".to_string(),
             email: "alice@a.com".to_string(),
             avatar_url: "https://x/a.png".to_string(),
             r#type: "User".to_string(),
             site_admin: false,
+            account_sub: None,
+            cached_at: None,
         };
 
         super::upsert_auth_user(&db, &user)

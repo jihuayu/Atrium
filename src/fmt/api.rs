@@ -7,6 +7,7 @@ pub fn to_native_user_from_issue(issue: &IssueResponse) -> NativeUser {
     NativeUser {
         id: issue.user.id,
         login: issue.user.login.clone(),
+        display_name: issue.user.login.clone(),
         avatar_url: issue.user.avatar_url.clone(),
         email: String::new(),
     }
@@ -16,6 +17,7 @@ pub fn to_native_user_from_comment(comment: &CommentResponse) -> NativeUser {
     NativeUser {
         id: comment.user.id,
         login: comment.user.login.clone(),
+        display_name: comment.user.login.clone(),
         avatar_url: comment.user.avatar_url.clone(),
         email: String::new(),
     }

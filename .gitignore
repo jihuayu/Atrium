@@ -1,4 +1,6 @@
 /target
+.wrangler
 .wrangler.test.*.toml
+node_modules
 .claude
 deploy/worker/.wrangler

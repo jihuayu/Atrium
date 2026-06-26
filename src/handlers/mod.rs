@@ -10,11 +10,11 @@ pub mod utterances;
 use serde::de::DeserializeOwned;
 
 use crate::{
+    ApiError, AppContext,
     fmt::user::to_api_user,
     markdown,
     router::{AppRequest, AppResponse},
     types::RenderMarkdownInput,
-    ApiError, AppContext,
 };
 
 pub fn path_param(req: &AppRequest, name: &str) -> crate::Result<String> {
@@ -96,50 +96,41 @@ pub async fn current_user(_req: AppRequest, ctx: &AppContext<'_>) -> AppResponse
 
 pub async fn root(_req: AppRequest, _ctx: &AppContext<'_>) -> AppResponse {
     let text = concat!(
-        "Atrium - GitHub Issues compatible comment backend\n",
+        "Atrium - native website/page/comment service\n",
         "\n",
-        "GitHub-Compatible API (token auth):\n",
-        "  GET    /repos/{owner}/{repo}/issues\n",
-        "  POST   /repos/{owner}/{repo}/issues\n",
-        "  GET    /repos/{owner}/{repo}/issues/{number}\n",
-        "  PATCH  /repos/{owner}/{repo}/issues/{number}\n",
-        "  GET    /repos/{owner}/{repo}/issues/{number}/comments\n",
-        "  POST   /repos/{owner}/{repo}/issues/{number}/comments\n",
-        "  GET    /repos/{owner}/{repo}/issues/comments/{id}\n",
-        "  PATCH  /repos/{owner}/{repo}/issues/comments/{id}\n",
-        "  DELETE /repos/{owner}/{repo}/issues/comments/{id}\n",
-        "  POST   /repos/{owner}/{repo}/issues/comments/{id}/reactions\n",
-        "  DELETE /repos/{owner}/{repo}/issues/comments/{id}/reactions/{id}\n",
-        "  GET    /search/issues?q=...\n",
+        "站点接入:\n",
+        "  1. 阅读完整接入说明: /docs/discovery\n",
+        "  2. 在站点发布 https://<host>/.well-known/atrium.json，或添加 _atrium.<host> TXT\n",
+        "  3. 不需要声明 website_key；Atrium 会从当前页面 hostname 推导，origin 可省略\n",
+        "  4. admin_emails 里的邮箱登录后会自动认领该 website admin 权限\n",
         "\n",
-        "Native API (JWT auth):\n",
-        "  POST   /api/v1/auth/github\n",
-        "  GET    /api/v1/auth/github/authorize\n",
-        "  GET    /api/v1/auth/github/callback\n",
-        "  POST   /api/v1/auth/google\n",
-        "  POST   /api/v1/auth/apple\n",
+        "Native API:\n",
+        "  POST   /api/v1/auth/account\n",
+        "  GET    /api/v1/auth/account/authorize\n",
+        "  GET    /api/v1/auth/account/callback\n",
         "  POST   /api/v1/auth/refresh\n",
         "  DELETE /api/v1/auth/session\n",
         "  GET    /api/v1/auth/me\n",
-        "  POST   /api/v1/repos\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/threads\n",
-        "  POST   /api/v1/repos/{owner}/{repo}/threads\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/threads/{number}\n",
-        "  PATCH  /api/v1/repos/{owner}/{repo}/threads/{number}\n",
-        "  DELETE /api/v1/repos/{owner}/{repo}/threads/{number}\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/threads/{number}/comments\n",
-        "  POST   /api/v1/repos/{owner}/{repo}/threads/{number}/comments\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/comments/{id}\n",
-        "  PATCH  /api/v1/repos/{owner}/{repo}/comments/{id}\n",
-        "  DELETE /api/v1/repos/{owner}/{repo}/comments/{id}\n",
-        "  POST   /api/v1/repos/{owner}/{repo}/comments/{id}/reactions\n",
-        "  DELETE /api/v1/repos/{owner}/{repo}/comments/{id}/reactions/{content}\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/labels\n",
-        "  POST   /api/v1/repos/{owner}/{repo}/labels\n",
-        "  DELETE /api/v1/repos/{owner}/{repo}/labels/{name}\n",
-        "  GET    /api/v1/repos/{owner}/{repo}/export\n",
+        "  GET    /api/v1/discovery/public-key\n",
+        "  POST   /api/v1/websites\n",
+        "  GET    /api/v1/websites\n",
+        "  GET    /api/v1/websites/{websiteKey}\n",
+        "  PATCH  /api/v1/websites/{websiteKey}\n",
+        "  GET    /api/v1/websites/{websiteKey}/admins\n",
+        "  POST   /api/v1/websites/{websiteKey}/admins\n",
+        "  DELETE /api/v1/websites/{websiteKey}/admins/{userId}\n",
+        "  PUT    /api/v1/websites/{websiteKey}/pages/{pageKey}\n",
+        "  GET    /api/v1/websites/{websiteKey}/pages/{pageKey}/comments\n",
+        "  POST   /api/v1/websites/{websiteKey}/pages/{pageKey}/comments\n",
+        "  PATCH  /api/v1/websites/{websiteKey}/comments/{commentId}\n",
+        "  DELETE /api/v1/websites/{websiteKey}/comments/{commentId}\n",
+        "  PUT    /api/v1/websites/{websiteKey}/comments/{commentId}/reactions/{content}\n",
+        "  DELETE /api/v1/websites/{websiteKey}/comments/{commentId}/reactions/{content}\n",
+        "  GET    /api/v1/comments/current\n",
+        "  POST   /api/v1/comments/current\n",
+        "  GET    /api/v1/comments/current/replies\n",
         "\n",
-        "Source: https://github.com/pnnh/atrium\n",
+        "Source: https://github.com/jihuayu/atrium\n",
     );
     AppResponse {
         status: 200,
@@ -161,9 +152,11 @@ mod tests {
             Some("</next>; rel=\"next\"".to_string()),
         );
 
-        assert!(response
-            .headers
-            .iter()
-            .any(|(name, value)| name == "Link" && value == "</next>; rel=\"next\""));
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Link" && value == "</next>; rel=\"next\"")
+        );
     }
 }

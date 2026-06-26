@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
+    AppContext,
     handlers::{header_value, respond},
     router::{AppRequest, AppResponse},
-    AppContext,
 };
 
 pub async fn proxy_token(req: AppRequest, ctx: &AppContext<'_>) -> AppResponse {
@@ -49,11 +49,11 @@ mod tests {
     use bytes::Bytes;
 
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::{Database, DbValue},
         router::AppRequest,
         types::GitHubApiUser,
-        AppContext,
     };
 
     struct NoopDb;
@@ -144,6 +144,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };
@@ -167,10 +176,11 @@ mod tests {
         let resp = super::proxy_token(req, &ctx).await;
         assert_eq!(resp.status, 202);
         assert_eq!(resp.body, Bytes::from_static(br#"{"ok":true}"#));
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
 
         let seen_headers = http
             .seen_headers
@@ -212,6 +222,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };

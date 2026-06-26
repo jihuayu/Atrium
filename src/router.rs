@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use serde::Serialize;
 
-use crate::{handlers, ApiError, AppContext};
+use crate::{ApiError, AppContext, handlers};
 
 pub struct AppRequest {
     pub method: String,
@@ -62,58 +62,46 @@ impl AppResponse {
 
 #[derive(Clone)]
 enum Route {
-    ApiAuthGithub,
-    ApiAuthGithubAuthorize,
-    ApiAuthGithubCallback,
-    ApiAuthGoogle,
-    ApiAuthApple,
+    DocsDiscovery,
+    ApiAuthAccount,
+    ApiAuthAccountAuthorize,
+    ApiAuthAccountCallback,
+    ApiDiscoveryPublicKey,
+    ApiCreateWebsite,
+    ApiListWebsites,
+    ApiGetWebsite,
+    ApiUpdateWebsite,
+    ApiListWebsiteAdmins,
+    ApiAddWebsiteAdmin,
+    ApiRemoveWebsiteAdmin,
+    ApiUpsertPage,
+    ApiListPages,
+    ApiGetPage,
+    ApiListPageComments,
+    ApiCreatePageComment,
+    ApiUpdateNativeComment,
+    ApiDeleteNativeComment,
+    ApiSetNativeReaction,
+    ApiDeleteNativeReaction,
+    ApiCurrentComments,
+    ApiCreateCurrentComment,
+    ApiCurrentReplies,
+    ApiSetCurrentReaction,
+    ApiDeleteCurrentReaction,
+    ApiModerationComments,
+    ApiBanUser,
+    ApiListBans,
+    ApiUnbanUser,
     ApiAuthRefresh,
     ApiAuthSessionDelete,
     ApiAuthMe,
-    ApiListThreads,
-    ApiCreateThread,
-    ApiGetThread,
-    ApiUpdateThread,
-    ApiDeleteThread,
-    ApiListComments,
-    ApiCreateComment,
-    ApiGetComment,
-    ApiUpdateComment,
-    ApiDeleteComment,
-    ApiCreateReaction,
-    ApiDeleteReaction,
-    ApiListLabels,
-    ApiCreateLabel,
-    ApiDeleteLabel,
-    ApiExportRepo,
-    ApiCreateRepo,
-    ApiGetRepoSettings,
-    ApiUpdateRepoSettings,
-    ListIssues,
-    CreateIssue,
-    GetIssue,
-    UpdateIssue,
-    ListComments,
-    CreateComment,
-    GetComment,
-    UpdateComment,
-    DeleteComment,
-    ListReactions,
-    CreateReaction,
-    DeleteReaction,
-    ListLabels,
-    CreateLabel,
-    SearchIssues,
-    RenderMarkdown,
-    ProxyUtterancesToken,
-    GetCurrentUser,
-    ExportUserRepos,
     Root,
 }
 
 pub struct AppRouter {
     get: matchit::Router<Route>,
     post: matchit::Router<Route>,
+    put: matchit::Router<Route>,
     patch: matchit::Router<Route>,
     delete: matchit::Router<Route>,
 }
@@ -129,6 +117,7 @@ impl AppRouter {
         let mut router = Self {
             get: matchit::Router::new(),
             post: matchit::Router::new(),
+            put: matchit::Router::new(),
             patch: matchit::Router::new(),
             delete: matchit::Router::new(),
         };
@@ -136,116 +125,86 @@ impl AppRouter {
         router.get.insert("/", Route::Root).unwrap();
         router
             .get
+            .insert("/docs/discovery", Route::DocsDiscovery)
+            .unwrap();
+        router
+            .get
             .insert("/api/v1/auth/me", Route::ApiAuthMe)
             .unwrap();
         router
             .get
             .insert(
-                "/api/v1/auth/github/authorize",
-                Route::ApiAuthGithubAuthorize,
+                "/api/v1/auth/account/authorize",
+                Route::ApiAuthAccountAuthorize,
             )
             .unwrap();
         router
             .get
             .insert(
-                "/api/v1/auth/github/callback",
-                Route::ApiAuthGithubCallback,
+                "/api/v1/auth/account/callback",
+                Route::ApiAuthAccountCallback,
+            )
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/discovery/public-key", Route::ApiDiscoveryPublicKey)
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/websites", Route::ApiListWebsites)
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/websites/{websiteKey}", Route::ApiGetWebsite)
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/websites/{websiteKey}/admins",
+                Route::ApiListWebsiteAdmins,
+            )
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/websites/{websiteKey}/pages", Route::ApiListPages)
+            .unwrap();
+        router
+            .get
+            .insert(
+                "/api/v1/websites/{websiteKey}/pages/{pageKey}",
+                Route::ApiGetPage,
             )
             .unwrap();
         router
             .get
             .insert(
-                "/api/v1/repos/{owner}/{repo}/threads",
-                Route::ApiListThreads,
+                "/api/v1/websites/{websiteKey}/pages/{pageKey}/comments",
+                Route::ApiListPageComments,
             )
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/comments/current", Route::ApiCurrentComments)
+            .unwrap();
+        router
+            .get
+            .insert("/api/v1/comments/current/replies", Route::ApiCurrentReplies)
             .unwrap();
         router
             .get
             .insert(
-                "/api/v1/repos/{owner}/{repo}/threads/{number}",
-                Route::ApiGetThread,
+                "/api/v1/websites/{websiteKey}/admin/comments",
+                Route::ApiModerationComments,
             )
             .unwrap();
         router
             .get
-            .insert(
-                "/api/v1/repos/{owner}/{repo}/threads/{number}/comments",
-                Route::ApiListComments,
-            )
-            .unwrap();
-        router
-            .get
-            .insert(
-                "/api/v1/repos/{owner}/{repo}/comments/{id}",
-                Route::ApiGetComment,
-            )
-            .unwrap();
-        router
-            .get
-            .insert("/api/v1/repos/{owner}/{repo}/labels", Route::ApiListLabels)
-            .unwrap();
-        router
-            .get
-            .insert("/api/v1/repos/{owner}/{repo}/export", Route::ApiExportRepo)
-            .unwrap();
-        router
-            .get
-            .insert("/api/v1/repos/{owner}/{repo}", Route::ApiGetRepoSettings)
-            .unwrap();
-        router
-            .get
-            .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
-                Route::ListReactions,
-            )
-            .unwrap();
-        router
-            .get
-            .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}",
-                Route::GetComment,
-            )
-            .unwrap();
-        router
-            .get
-            .insert("/repos/{owner}/{repo}/issues", Route::ListIssues)
-            .unwrap();
-        router
-            .get
-            .insert("/repos/{owner}/{repo}/issues/{number}", Route::GetIssue)
-            .unwrap();
-        router
-            .get
-            .insert(
-                "/repos/{owner}/{repo}/issues/{number}/comments",
-                Route::ListComments,
-            )
-            .unwrap();
-        router
-            .get
-            .insert("/repos/{owner}/{repo}/labels", Route::ListLabels)
-            .unwrap();
-        router
-            .get
-            .insert("/search/issues", Route::SearchIssues)
-            .unwrap();
-        router.get.insert("/user", Route::GetCurrentUser).unwrap();
-        router
-            .get
-            .insert("/user/export", Route::ExportUserRepos)
+            .insert("/api/v1/websites/{websiteKey}/bans", Route::ApiListBans)
             .unwrap();
 
         router
             .post
-            .insert("/api/v1/auth/github", Route::ApiAuthGithub)
-            .unwrap();
-        router
-            .post
-            .insert("/api/v1/auth/google", Route::ApiAuthGoogle)
-            .unwrap();
-        router
-            .post
-            .insert("/api/v1/auth/apple", Route::ApiAuthApple)
+            .insert("/api/v1/auth/account", Route::ApiAuthAccount)
             .unwrap();
         router
             .post
@@ -253,96 +212,63 @@ impl AppRouter {
             .unwrap();
         router
             .post
-            .insert("/api/v1/repos", Route::ApiCreateRepo)
+            .insert("/api/v1/websites", Route::ApiCreateWebsite)
             .unwrap();
         router
             .post
             .insert(
-                "/api/v1/repos/{owner}/{repo}/threads",
-                Route::ApiCreateThread,
+                "/api/v1/websites/{websiteKey}/admins",
+                Route::ApiAddWebsiteAdmin,
             )
             .unwrap();
         router
             .post
             .insert(
-                "/api/v1/repos/{owner}/{repo}/threads/{number}/comments",
-                Route::ApiCreateComment,
+                "/api/v1/websites/{websiteKey}/pages/{pageKey}/comments",
+                Route::ApiCreatePageComment,
             )
             .unwrap();
         router
             .post
+            .insert("/api/v1/comments/current", Route::ApiCreateCurrentComment)
+            .unwrap();
+        router
+            .post
+            .insert("/api/v1/websites/{websiteKey}/bans", Route::ApiBanUser)
+            .unwrap();
+
+        router
+            .put
             .insert(
-                "/api/v1/repos/{owner}/{repo}/comments/{id}/reactions",
-                Route::ApiCreateReaction,
+                "/api/v1/websites/{websiteKey}/pages/{pageKey}",
+                Route::ApiUpsertPage,
             )
             .unwrap();
         router
-            .post
-            .insert("/api/v1/repos/{owner}/{repo}/labels", Route::ApiCreateLabel)
-            .unwrap();
-        router
-            .post
+            .put
             .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}/reactions",
-                Route::CreateReaction,
+                "/api/v1/websites/{websiteKey}/comments/{commentId}/reactions/{content}",
+                Route::ApiSetNativeReaction,
             )
             .unwrap();
         router
-            .post
-            .insert("/repos/{owner}/{repo}/issues", Route::CreateIssue)
-            .unwrap();
-        router
-            .post
+            .put
             .insert(
-                "/repos/{owner}/{repo}/issues/{number}/comments",
-                Route::CreateComment,
+                "/api/v1/comments/current/{commentId}/reactions/{content}",
+                Route::ApiSetCurrentReaction,
             )
-            .unwrap();
-        router
-            .post
-            .insert("/repos/{owner}/{repo}/labels", Route::CreateLabel)
-            .unwrap();
-        router
-            .post
-            .insert("/markdown", Route::RenderMarkdown)
-            .unwrap();
-        router
-            .post
-            .insert("/api/utterances/token", Route::ProxyUtterancesToken)
-            .unwrap();
-        router
-            .post
-            .insert("/token", Route::ProxyUtterancesToken)
             .unwrap();
 
         router
             .patch
-            .insert(
-                "/api/v1/repos/{owner}/{repo}/threads/{number}",
-                Route::ApiUpdateThread,
-            )
+            .insert("/api/v1/websites/{websiteKey}", Route::ApiUpdateWebsite)
             .unwrap();
         router
             .patch
             .insert(
-                "/api/v1/repos/{owner}/{repo}/comments/{id}",
-                Route::ApiUpdateComment,
+                "/api/v1/websites/{websiteKey}/comments/{commentId}",
+                Route::ApiUpdateNativeComment,
             )
-            .unwrap();
-        router
-            .patch
-            .insert("/api/v1/repos/{owner}/{repo}", Route::ApiUpdateRepoSettings)
-            .unwrap();
-        router
-            .patch
-            .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}",
-                Route::UpdateComment,
-            )
-            .unwrap();
-        router
-            .patch
-            .insert("/repos/{owner}/{repo}/issues/{number}", Route::UpdateIssue)
             .unwrap();
 
         router
@@ -352,43 +278,36 @@ impl AppRouter {
         router
             .delete
             .insert(
-                "/api/v1/repos/{owner}/{repo}/threads/{number}",
-                Route::ApiDeleteThread,
+                "/api/v1/websites/{websiteKey}/admins/{userId}",
+                Route::ApiRemoveWebsiteAdmin,
             )
             .unwrap();
         router
             .delete
             .insert(
-                "/api/v1/repos/{owner}/{repo}/comments/{id}",
-                Route::ApiDeleteComment,
+                "/api/v1/websites/{websiteKey}/comments/{commentId}",
+                Route::ApiDeleteNativeComment,
             )
             .unwrap();
         router
             .delete
             .insert(
-                "/api/v1/repos/{owner}/{repo}/comments/{id}/reactions/{content}",
-                Route::ApiDeleteReaction,
+                "/api/v1/websites/{websiteKey}/comments/{commentId}/reactions/{content}",
+                Route::ApiDeleteNativeReaction,
             )
             .unwrap();
         router
             .delete
             .insert(
-                "/api/v1/repos/{owner}/{repo}/labels/{name}",
-                Route::ApiDeleteLabel,
+                "/api/v1/comments/current/{commentId}/reactions/{content}",
+                Route::ApiDeleteCurrentReaction,
             )
             .unwrap();
         router
             .delete
             .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}/reactions/{rid}",
-                Route::DeleteReaction,
-            )
-            .unwrap();
-        router
-            .delete
-            .insert(
-                "/repos/{owner}/{repo}/issues/comments/{id}",
-                Route::DeleteComment,
+                "/api/v1/websites/{websiteKey}/bans/{userId}",
+                Route::ApiUnbanUser,
             )
             .unwrap();
 
@@ -399,23 +318,29 @@ impl AppRouter {
         let table = match req.method.as_str() {
             "GET" => &self.get,
             "POST" => &self.post,
+            "PUT" => &self.put,
             "PATCH" => &self.patch,
             "DELETE" => &self.delete,
             "OPTIONS" => {
                 return AppResponse::no_content()
-                    .with_header("Allow", "GET,POST,PATCH,DELETE,OPTIONS")
+                    .with_header("Allow", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
             }
             _ => {
                 return AppResponse::json(
                     405,
                     &serde_json::json!({"message": "Method Not Allowed"}),
-                )
+                );
             }
         };
 
         let matched = match table.at(&req.path) {
             Ok(matched) => matched,
-            Err(_) => return AppResponse::json(404, &serde_json::json!({"message": "Not Found"})),
+            Err(_) => {
+                return AppResponse::json(
+                    404,
+                    &serde_json::json!({"error": "not_found", "message": "Not found"}),
+                );
+            }
         };
 
         req.path_params = matched
@@ -425,56 +350,63 @@ impl AppRouter {
             .collect();
 
         match matched.value {
-            Route::ApiAuthGithub => handlers::api::auth::github(req, ctx).await,
-            Route::ApiAuthGithubAuthorize => {
-                handlers::api::auth::github_authorize(req, ctx).await
+            Route::DocsDiscovery => handlers::api::native::docs_discovery(req, ctx).await,
+            Route::ApiAuthAccount => handlers::api::native::auth_account(req, ctx).await,
+            Route::ApiAuthAccountAuthorize => {
+                handlers::api::native::auth_account_authorize(req, ctx).await
             }
-            Route::ApiAuthGithubCallback => {
-                handlers::api::auth::github_callback(req, ctx).await
+            Route::ApiAuthAccountCallback => {
+                handlers::api::native::auth_account_callback(req, ctx).await
             }
-            Route::ApiAuthGoogle => handlers::api::auth::google(req, ctx).await,
-            Route::ApiAuthApple => handlers::api::auth::apple(req, ctx).await,
-            Route::ApiAuthRefresh => handlers::api::auth::refresh(req, ctx).await,
-            Route::ApiAuthSessionDelete => handlers::api::auth::session_delete(req, ctx).await,
-            Route::ApiAuthMe => handlers::api::auth::me(req, ctx).await,
-            Route::ApiListThreads => handlers::api::threads::list(req, ctx).await,
-            Route::ApiCreateThread => handlers::api::threads::create(req, ctx).await,
-            Route::ApiGetThread => handlers::api::threads::get(req, ctx).await,
-            Route::ApiUpdateThread => handlers::api::threads::update(req, ctx).await,
-            Route::ApiDeleteThread => handlers::api::threads::delete(req, ctx).await,
-            Route::ApiListComments => handlers::api::comments::list(req, ctx).await,
-            Route::ApiCreateComment => handlers::api::comments::create(req, ctx).await,
-            Route::ApiGetComment => handlers::api::comments::get(req, ctx).await,
-            Route::ApiUpdateComment => handlers::api::comments::update(req, ctx).await,
-            Route::ApiDeleteComment => handlers::api::comments::delete(req, ctx).await,
-            Route::ApiCreateReaction => handlers::api::reactions::create(req, ctx).await,
-            Route::ApiDeleteReaction => handlers::api::reactions::delete(req, ctx).await,
-            Route::ApiListLabels => handlers::api::labels::list(req, ctx).await,
-            Route::ApiCreateLabel => handlers::api::labels::create(req, ctx).await,
-            Route::ApiDeleteLabel => handlers::api::labels::delete(req, ctx).await,
-            Route::ApiExportRepo => handlers::api::export::get(req, ctx).await,
-            Route::ApiCreateRepo => handlers::api::admin::create(req, ctx).await,
-            Route::ApiGetRepoSettings => handlers::api::admin::get(req, ctx).await,
-            Route::ApiUpdateRepoSettings => handlers::api::admin::update(req, ctx).await,
-            Route::ListIssues => handlers::issues::list(req, ctx).await,
-            Route::CreateIssue => handlers::issues::create(req, ctx).await,
-            Route::GetIssue => handlers::issues::get(req, ctx).await,
-            Route::UpdateIssue => handlers::issues::update(req, ctx).await,
-            Route::ListComments => handlers::comments::list(req, ctx).await,
-            Route::CreateComment => handlers::comments::create(req, ctx).await,
-            Route::GetComment => handlers::comments::get(req, ctx).await,
-            Route::UpdateComment => handlers::comments::update(req, ctx).await,
-            Route::DeleteComment => handlers::comments::delete(req, ctx).await,
-            Route::ListReactions => handlers::reactions::list(req, ctx).await,
-            Route::CreateReaction => handlers::reactions::create(req, ctx).await,
-            Route::DeleteReaction => handlers::reactions::delete(req, ctx).await,
-            Route::ListLabels => handlers::labels::list(req, ctx).await,
-            Route::CreateLabel => handlers::labels::create(req, ctx).await,
-            Route::SearchIssues => handlers::search::search(req, ctx).await,
-            Route::RenderMarkdown => handlers::render_markdown(req, ctx).await,
-            Route::ProxyUtterancesToken => handlers::utterances::proxy_token(req, ctx).await,
-            Route::GetCurrentUser => handlers::current_user(req, ctx).await,
-            Route::ExportUserRepos => handlers::exports::export_user_repos(req, ctx).await,
+            Route::ApiDiscoveryPublicKey => {
+                handlers::api::native::discovery_public_key(req, ctx).await
+            }
+            Route::ApiCreateWebsite => handlers::api::native::create_website(req, ctx).await,
+            Route::ApiListWebsites => handlers::api::native::list_websites(req, ctx).await,
+            Route::ApiGetWebsite => handlers::api::native::get_website(req, ctx).await,
+            Route::ApiUpdateWebsite => handlers::api::native::update_website(req, ctx).await,
+            Route::ApiListWebsiteAdmins => {
+                handlers::api::native::list_website_admins(req, ctx).await
+            }
+            Route::ApiAddWebsiteAdmin => handlers::api::native::add_website_admin(req, ctx).await,
+            Route::ApiRemoveWebsiteAdmin => {
+                handlers::api::native::remove_website_admin(req, ctx).await
+            }
+            Route::ApiUpsertPage => handlers::api::native::upsert_page(req, ctx).await,
+            Route::ApiListPages => handlers::api::native::list_pages(req, ctx).await,
+            Route::ApiGetPage => handlers::api::native::get_page(req, ctx).await,
+            Route::ApiListPageComments => handlers::api::native::list_page_comments(req, ctx).await,
+            Route::ApiCreatePageComment => {
+                handlers::api::native::create_page_comment(req, ctx).await
+            }
+            Route::ApiUpdateNativeComment => handlers::api::native::update_comment(req, ctx).await,
+            Route::ApiDeleteNativeComment => handlers::api::native::delete_comment(req, ctx).await,
+            Route::ApiSetNativeReaction => handlers::api::native::set_reaction(req, ctx).await,
+            Route::ApiDeleteNativeReaction => {
+                handlers::api::native::delete_reaction(req, ctx).await
+            }
+            Route::ApiCurrentComments => handlers::api::native::current_comments(req, ctx).await,
+            Route::ApiCreateCurrentComment => {
+                handlers::api::native::create_current_comment(req, ctx).await
+            }
+            Route::ApiCurrentReplies => handlers::api::native::current_replies(req, ctx).await,
+            Route::ApiSetCurrentReaction => {
+                handlers::api::native::set_current_reaction(req, ctx).await
+            }
+            Route::ApiDeleteCurrentReaction => {
+                handlers::api::native::delete_current_reaction(req, ctx).await
+            }
+            Route::ApiModerationComments => {
+                handlers::api::native::moderation_comments(req, ctx).await
+            }
+            Route::ApiBanUser => handlers::api::native::ban_user(req, ctx).await,
+            Route::ApiListBans => handlers::api::native::list_bans(req, ctx).await,
+            Route::ApiUnbanUser => handlers::api::native::unban_user(req, ctx).await,
+            Route::ApiAuthRefresh => handlers::api::native::auth_refresh(req, ctx).await,
+            Route::ApiAuthSessionDelete => {
+                handlers::api::native::auth_session_delete(req, ctx).await
+            }
+            Route::ApiAuthMe => handlers::api::native::auth_me(req, ctx).await,
             Route::Root => handlers::root(req, ctx).await,
         }
     }
@@ -515,13 +447,13 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
 
-    use super::{parse_query_string, AppRequest, AppRouter};
+    use super::{AppRequest, AppRouter, parse_query_string};
     use crate::{
+        AppContext,
         auth::{HttpClient, UpstreamResponse},
         db::{Database, DbValue},
         error::ApiError,
         types::GitHubApiUser,
-        AppContext,
     };
 
     struct NoopDb;
@@ -583,20 +515,25 @@ mod tests {
     #[test]
     fn matches_repo_routes() {
         let router = AppRouter::new();
-        let issue = router.get.at("/repos/jihuayu/utterances/issues/1");
-        assert!(issue.is_ok());
-        let list = router.get.at("/repos/jihuayu/utterances/issues");
-        assert!(list.is_ok());
-        let create = router.post.at("/repos/jihuayu/utterances/issues");
-        assert!(create.is_ok());
-        let comments = router.get.at("/repos/jihuayu/utterances/issues/1/comments");
-        assert!(comments.is_ok());
-        let export = router.get.at("/user/export");
-        assert!(export.is_ok());
-        let api_threads = router.get.at("/api/v1/repos/jihuayu/utterances/threads");
-        assert!(api_threads.is_ok());
-        let api_auth = router.post.at("/api/v1/auth/github");
-        assert!(api_auth.is_ok());
+        assert!(router.get.at("/repos/jihuayu/utterances/issues/1").is_err());
+        assert!(router.post.at("/repos/jihuayu/utterances/issues").is_err());
+        assert!(
+            router
+                .get
+                .at("/api/v1/repos/jihuayu/utterances/threads")
+                .is_err()
+        );
+        assert!(router.post.at("/api/v1/auth/github").is_err());
+        assert!(router.post.at("/api/v1/auth/account").is_ok());
+        assert!(router.get.at("/api/v1/auth/account/authorize").is_ok());
+        assert!(
+            router
+                .get
+                .at("/api/v1/websites/example/pages/post/comments")
+                .is_ok()
+        );
+        assert!(router.put.at("/api/v1/websites/example/pages/post").is_ok());
+        assert!(router.get.at("/api/v1/comments/current").is_ok());
     }
 
     #[tokio::test]
@@ -629,6 +566,15 @@ mod tests {
             apple_app_id: None,
             github_client_id: None,
             github_client_secret: None,
+            account_base_url: None,
+            account_audience: None,
+            account_internal_secret: None,
+            super_admin_account_ids: None,
+            discovery_private_jwk: None,
+            discovery_public_jwk: None,
+            discovery_key_id: None,
+            test_discovery_well_known: None,
+            test_discovery_dns_txt: None,
             stateful_sessions: false,
             test_bypass_secret: None,
         };
@@ -649,9 +595,14 @@ mod tests {
             )
             .await;
         assert_eq!(options_resp.status, 204);
-        assert!(options_resp.headers.iter().any(|(k, _)| k == "Allow"));
+        assert!(
+            options_resp
+                .headers
+                .iter()
+                .any(|(k, v)| k == "Allow" && v == "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+        );
 
-        let method_not_allowed = router
+        let put_not_found = router
             .handle(
                 AppRequest {
                     method: "PUT".to_string(),
@@ -666,7 +617,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert_eq!(method_not_allowed.status, 405);
+        assert_eq!(put_not_found.status, 404);
 
         let not_found = router
             .handle(
@@ -684,6 +635,9 @@ mod tests {
             )
             .await;
         assert_eq!(not_found.status, 404);
+        let body = serde_json::from_slice::<serde_json::Value>(&not_found.body).unwrap();
+        assert_eq!(body["error"], "not_found");
+        assert_eq!(body["message"], "Not found");
 
         let api_auth = router
             .handle(
@@ -700,7 +654,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(api_auth.status == 200 || api_auth.status == 500 || api_auth.status == 401);
+        assert_eq!(api_auth.status, 404);
 
         let utterances = router
             .handle(
@@ -717,7 +671,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert_eq!(utterances.status, 200);
+        assert_eq!(utterances.status, 404);
 
         let db_err = db.execute("select 1", &[]).await.err().expect("db execute");
         assert_eq!(db_err.status, 500);
