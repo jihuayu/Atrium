@@ -23,6 +23,7 @@ struct ServerConfig {
     discovery_public_jwk: Option<String>,
     discovery_key_id: Option<String>,
     cors_origin: Option<String>,
+    reset_sqlite_on_start: bool,
     prune_legacy_sqlite_on_start: bool,
 }
 
@@ -32,6 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if config.reset_sqlite_on_start {
+        reset_sqlite_files(&config.database_url)?;
+    }
     if config.prune_legacy_sqlite_on_start {
         prune_legacy_sqlite_files(&config.database_url)?;
     }
@@ -128,6 +132,10 @@ fn load_config_from_env() -> Result<ServerConfig, io::Error> {
             .filter(|v| !v.trim().is_empty()),
         cors_origin: env_with_fallback("ATRIUM_CORS_ORIGIN", "XTALK_CORS_ORIGIN")
             .filter(|v| !v.trim().is_empty()),
+        reset_sqlite_on_start: env::var("ATRIUM_RESET_SQLITE_ON_START")
+            .ok()
+            .map(|v| parse_bool_flag(&v))
+            .unwrap_or(false),
         prune_legacy_sqlite_on_start: env::var("ATRIUM_PRUNE_LEGACY_SQLITE_ON_START")
             .ok()
             .map(|v| parse_bool_flag(&v))
@@ -182,6 +190,26 @@ fn prune_legacy_sqlite_files(database_url: &str) -> io::Result<()> {
     Ok(())
 }
 
+fn reset_sqlite_files(database_url: &str) -> io::Result<()> {
+    let Some(active_path) = sqlite_path_from_url(database_url) else {
+        return Ok(());
+    };
+
+    for path in [
+        active_path.clone(),
+        sqlite_sidecar_path(&active_path, "-wal"),
+        sqlite_sidecar_path(&active_path, "-shm"),
+    ] {
+        match fs::remove_file(&path) {
+            Ok(()) => eprintln!("reset sqlite file: {}", path.display()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
+}
+
 fn sqlite_path_from_url(database_url: &str) -> Option<PathBuf> {
     let raw_path = database_url
         .strip_prefix("sqlite://")?
@@ -229,7 +257,7 @@ mod tests {
 
     use super::{
         ServerConfig, load_config_from_env, parse_bool_flag, parse_secret_bytes,
-        prune_legacy_sqlite_files, run,
+        prune_legacy_sqlite_files, reset_sqlite_files, run,
     };
 
     fn env_lock() -> &'static Mutex<()> {
@@ -263,6 +291,7 @@ mod tests {
             "ATRIUM_DISCOVERY_PRIVATE_JWK",
             "ATRIUM_DISCOVERY_PUBLIC_JWK",
             "ATRIUM_DISCOVERY_KEY_ID",
+            "ATRIUM_RESET_SQLITE_ON_START",
             "ATRIUM_PRUNE_LEGACY_SQLITE_ON_START",
             "PORT",
             "ATRIUM_TEST_BYPASS_SECRET",
@@ -339,6 +368,28 @@ mod tests {
     }
 
     #[test]
+    fn reset_sqlite_files_removes_active_db_and_sidecars_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let active = dir.path().join("atrium.db");
+        let active_wal = dir.path().join("atrium.db-wal");
+        let active_shm = dir.path().join("atrium.db-shm");
+        let other = dir.path().join("other.db");
+
+        std::fs::write(&active, "active").expect("write active");
+        std::fs::write(&active_wal, "active wal").expect("write active wal");
+        std::fs::write(&active_shm, "active shm").expect("write active shm");
+        std::fs::write(&other, "other").expect("write other");
+
+        let db_url = format!("sqlite://{}", active.to_string_lossy().replace('\\', "/"));
+        reset_sqlite_files(&db_url).expect("reset");
+
+        assert!(!active.exists());
+        assert!(!active_wal.exists());
+        assert!(!active_shm.exists());
+        assert!(other.exists());
+    }
+
+    #[test]
     fn parse_secret_bytes_supports_standard_and_urlsafe() {
         assert_eq!(parse_secret_bytes("YXRyaXVt"), b"atrium".to_vec());
         assert_eq!(parse_secret_bytes("YXRyaXVt"), b"atrium".to_vec());
@@ -382,6 +433,7 @@ mod tests {
         assert_eq!(cfg.account_internal_secret, None);
         assert_eq!(cfg.super_admin_account_ids, None);
         assert_eq!(cfg.cors_origin, None);
+        assert!(!cfg.reset_sqlite_on_start);
         assert!(!cfg.prune_legacy_sqlite_on_start);
     }
 
@@ -452,6 +504,7 @@ mod tests {
             discovery_public_jwk: None,
             discovery_key_id: None,
             cors_origin: None,
+            reset_sqlite_on_start: false,
             prune_legacy_sqlite_on_start: false,
         };
 
@@ -482,6 +535,7 @@ mod tests {
             discovery_public_jwk: None,
             discovery_key_id: None,
             cors_origin: None,
+            reset_sqlite_on_start: false,
             prune_legacy_sqlite_on_start: false,
         };
 
