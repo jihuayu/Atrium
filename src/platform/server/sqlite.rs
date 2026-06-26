@@ -257,7 +257,9 @@ impl Database for SqliteDatabase {
 mod tests {
     use super::SqliteDatabase;
     use crate::db::{Database, DbValue};
-    use sqlx::{SqlitePool, query, query_scalar, sqlite::SqliteConnectOptions};
+    use sqlx::{
+        SqlitePool, query, query_scalar, sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions,
+    };
     use std::str::FromStr;
 
     async fn make_db() -> (tempfile::TempPath, SqliteDatabase) {
@@ -388,7 +390,9 @@ mod tests {
         let options = SqliteConnectOptions::from_str(&db_url)
             .expect("parse sqlite url")
             .create_if_missing(true);
-        let pool = SqlitePool::connect_with(options)
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
             .await
             .expect("connect legacy db");
         query(include_str!("../../../migrations/0001_initial_schema.sql"))
@@ -437,5 +441,105 @@ mod tests {
         assert!(v2.is_some());
         assert!(v3.is_some());
         assert!(v4.is_some());
+    }
+
+    #[tokio::test]
+    async fn connect_and_migrate_skips_orphaned_legacy_native_rows() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("legacy-orphans.db");
+        let db_url = format!("sqlite://{}", db_path.to_string_lossy().replace('\\', "/"));
+
+        let options = SqliteConnectOptions::from_str(&db_url)
+            .expect("parse sqlite url")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("connect legacy db");
+        query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .expect("disable foreign keys");
+        query(include_str!("../../../migrations/0001_initial_schema.sql"))
+            .execute(&pool)
+            .await
+            .expect("apply migration 0001 manually");
+        query(include_str!(
+            "../../../migrations/0002_multi_provider_auth.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("apply migration 0002 manually");
+        query(include_str!(
+            "../../../migrations/0003_repo_owner_identity.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("apply migration 0003 manually");
+        query(include_str!("../../../migrations/0004_issue_slug.sql"))
+            .execute(&pool)
+            .await
+            .expect("apply migration 0004 manually");
+        query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .expect("disable foreign keys for legacy orphan fixtures");
+
+        query("INSERT INTO users (id, login, email, avatar_url, type, site_admin) VALUES (1, 'owner', 'owner@example.com', '', 'User', 0)")
+            .execute(&pool)
+            .await
+            .expect("insert user");
+        query("INSERT INTO repos (id, owner, name, admin_user_id, owner_user_id, created_at) VALUES (1, 'owner', 'site', 999, 998, datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert repo with orphan admins");
+        query("INSERT INTO issues (id, repo_id, number, title, body, user_id, slug, created_at, updated_at) VALUES (1, 1, 1, 'Page', 'body', 1, 'page', datetime('now'), datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert issue");
+        query("INSERT INTO comments (id, repo_id, issue_id, body, user_id, created_at, updated_at) VALUES (1, 1, 1, 'orphan user comment', 999, datetime('now'), datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert orphan comment");
+        query("INSERT INTO comments (id, repo_id, issue_id, body, user_id, created_at, updated_at) VALUES (2, 1, 1, 'valid comment', 1, datetime('now'), datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert valid comment");
+        query("INSERT INTO reactions (id, comment_id, user_id, content, created_at) VALUES (1, 1, 1, 'heart', datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert reaction for skipped comment");
+        query("INSERT INTO reactions (id, comment_id, user_id, content, created_at) VALUES (2, 2, 999, 'heart', datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert orphan reaction user");
+        query("INSERT INTO reactions (id, comment_id, user_id, content, created_at) VALUES (3, 2, 1, '+1', datetime('now'))")
+            .execute(&pool)
+            .await
+            .expect("insert valid reaction");
+        pool.close().await;
+
+        let _db = SqliteDatabase::connect_and_migrate(&db_url)
+            .await
+            .expect("connect and migrate through sqlx");
+
+        let verify_pool = SqlitePool::connect(&db_url).await.expect("verify connect");
+        let comment_count: i64 = query_scalar("SELECT COUNT(*) FROM comments")
+            .fetch_one(&verify_pool)
+            .await
+            .expect("count comments");
+        let reaction_count: i64 = query_scalar("SELECT COUNT(*) FROM comment_reactions")
+            .fetch_one(&verify_pool)
+            .await
+            .expect("count reactions");
+        let admin_count: i64 = query_scalar("SELECT COUNT(*) FROM website_admins")
+            .fetch_one(&verify_pool)
+            .await
+            .expect("count admins");
+
+        assert_eq!(comment_count, 1);
+        assert_eq!(reaction_count, 1);
+        assert_eq!(admin_count, 0);
     }
 }

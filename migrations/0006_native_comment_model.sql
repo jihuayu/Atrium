@@ -71,10 +71,16 @@ SELECT
 FROM repos r;
 
 INSERT OR IGNORE INTO website_admins (website_id, user_id, created_at)
-SELECT id, admin_user_id, created_at FROM repos WHERE admin_user_id IS NOT NULL;
+SELECT r.id, r.admin_user_id, r.created_at
+FROM repos r
+JOIN users u ON u.id = r.admin_user_id
+WHERE r.admin_user_id IS NOT NULL;
 
 INSERT OR IGNORE INTO website_admins (website_id, user_id, created_at)
-SELECT id, owner_user_id, created_at FROM repos WHERE owner_user_id IS NOT NULL;
+SELECT r.id, r.owner_user_id, r.created_at
+FROM repos r
+JOIN users u ON u.id = r.owner_user_id
+WHERE r.owner_user_id IS NOT NULL;
 
 INSERT INTO pages (id, website_id, key, title, url, normalized_url, metadata, comment_count, created_at, updated_at)
 SELECT
@@ -88,7 +94,8 @@ SELECT
     i.comment_count,
     i.created_at,
     i.updated_at
-FROM issues i;
+FROM issues i
+JOIN websites w ON w.id = i.repo_id;
 
 INSERT INTO comments_v2 (id, website_id, page_id, parent_comment_id, body, user_id, reactions, created_at, updated_at, deleted_at)
 SELECT
@@ -115,10 +122,34 @@ SELECT
     c.created_at,
     c.updated_at,
     c.deleted_at
-FROM comments c;
+FROM comments c
+JOIN websites w ON w.id = c.repo_id
+JOIN pages p ON p.id = c.issue_id
+JOIN users u ON u.id = c.user_id;
+
+CREATE TABLE legacy_comment_reactions_v2 (
+    id         INTEGER PRIMARY KEY,
+    comment_id INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    content    TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+INSERT INTO legacy_comment_reactions_v2 (id, comment_id, user_id, content, created_at)
+SELECT
+    reactions.id,
+    reactions.comment_id,
+    reactions.user_id,
+    CASE reactions.content WHEN '+1' THEN 'like' WHEN '-1' THEN 'dislike' ELSE reactions.content END,
+    reactions.created_at
+FROM reactions
+JOIN comments_v2 c ON c.id = reactions.comment_id
+JOIN users u ON u.id = reactions.user_id
+WHERE reactions.content IN ('+1','-1','heart','laugh','hooray','confused','rocket','eyes');
 
 DROP TABLE IF EXISTS issue_labels;
 DROP TABLE IF EXISTS labels;
+DROP TABLE IF EXISTS reactions;
 DROP TABLE IF EXISTS comments;
 DROP TABLE IF EXISTS issues;
 DROP TABLE IF EXISTS repos;
@@ -139,12 +170,11 @@ SELECT
     id,
     comment_id,
     user_id,
-    CASE content WHEN '+1' THEN 'like' WHEN '-1' THEN 'dislike' ELSE content END,
+    content,
     created_at
-FROM reactions
-WHERE content IN ('+1','-1','heart','laugh','hooray','confused','rocket','eyes');
+FROM legacy_comment_reactions_v2;
 
-DROP TABLE IF EXISTS reactions;
+DROP TABLE IF EXISTS legacy_comment_reactions_v2;
 
 CREATE INDEX IF NOT EXISTS idx_website_admins_user ON website_admins(user_id);
 CREATE INDEX IF NOT EXISTS idx_pages_website_key ON pages(website_id, key);
