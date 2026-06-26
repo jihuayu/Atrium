@@ -1,4 +1,7 @@
-use std::{env, io};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+};
 
 struct ServerConfig {
     base_url: String,
@@ -20,6 +23,7 @@ struct ServerConfig {
     discovery_public_jwk: Option<String>,
     discovery_key_id: Option<String>,
     cors_origin: Option<String>,
+    prune_legacy_sqlite_on_start: bool,
 }
 
 #[tokio::main]
@@ -28,6 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if config.prune_legacy_sqlite_on_start {
+        prune_legacy_sqlite_files(&config.database_url)?;
+    }
+
     let app = atrium::platform::server::build_app(
         &config.database_url,
         config.base_url,
@@ -120,6 +128,10 @@ fn load_config_from_env() -> Result<ServerConfig, io::Error> {
             .filter(|v| !v.trim().is_empty()),
         cors_origin: env_with_fallback("ATRIUM_CORS_ORIGIN", "XTALK_CORS_ORIGIN")
             .filter(|v| !v.trim().is_empty()),
+        prune_legacy_sqlite_on_start: env::var("ATRIUM_PRUNE_LEGACY_SQLITE_ON_START")
+            .ok()
+            .map(|v| parse_bool_flag(&v))
+            .unwrap_or(false),
     })
 }
 
@@ -135,6 +147,79 @@ fn parse_secret_bytes(value: &str) -> Vec<u8> {
         .unwrap_or_else(|_| value.as_bytes().to_vec())
 }
 
+fn parse_bool_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn prune_legacy_sqlite_files(database_url: &str) -> io::Result<()> {
+    let Some(active_path) = sqlite_path_from_url(database_url) else {
+        return Ok(());
+    };
+    let Some(parent) = active_path.parent() else {
+        return Ok(());
+    };
+    if !parent.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file() || is_active_sqlite_path(&path, &active_path) {
+            continue;
+        }
+        if !looks_like_sqlite_file(&path) {
+            continue;
+        }
+
+        fs::remove_file(&path)?;
+        eprintln!("pruned legacy sqlite file: {}", path.display());
+    }
+
+    Ok(())
+}
+
+fn sqlite_path_from_url(database_url: &str) -> Option<PathBuf> {
+    let raw_path = database_url
+        .strip_prefix("sqlite://")?
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    if raw_path.is_empty() || raw_path == ":memory:" {
+        return None;
+    }
+    Some(PathBuf::from(raw_path))
+}
+
+fn is_active_sqlite_path(path: &Path, active_path: &Path) -> bool {
+    path == active_path
+        || path == sqlite_sidecar_path(active_path, "-wal")
+        || path == sqlite_sidecar_path(active_path, "-shm")
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}{}", path.display(), suffix))
+}
+
+fn looks_like_sqlite_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|v| v.to_str()) else {
+        return false;
+    };
+
+    file_name.ends_with(".db")
+        || file_name.ends_with(".sqlite")
+        || file_name.ends_with(".sqlite3")
+        || file_name.ends_with(".db-wal")
+        || file_name.ends_with(".db-shm")
+        || file_name.ends_with(".sqlite-wal")
+        || file_name.ends_with(".sqlite-shm")
+        || file_name.ends_with(".sqlite3-wal")
+        || file_name.ends_with(".sqlite3-shm")
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -142,7 +227,10 @@ mod tests {
         time::Duration,
     };
 
-    use super::{ServerConfig, load_config_from_env, parse_secret_bytes, run};
+    use super::{
+        ServerConfig, load_config_from_env, parse_bool_flag, parse_secret_bytes,
+        prune_legacy_sqlite_files, run,
+    };
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -175,6 +263,7 @@ mod tests {
             "ATRIUM_DISCOVERY_PRIVATE_JWK",
             "ATRIUM_DISCOVERY_PUBLIC_JWK",
             "ATRIUM_DISCOVERY_KEY_ID",
+            "ATRIUM_PRUNE_LEGACY_SQLITE_ON_START",
             "PORT",
             "ATRIUM_TEST_BYPASS_SECRET",
             "XTALK_BASE_URL",
@@ -211,6 +300,42 @@ mod tests {
             .into_temp_path();
         let db_url = format!("sqlite://{}", db_file.to_string_lossy().replace('\\', "/"));
         (db_file, db_url)
+    }
+
+    #[test]
+    fn parse_bool_flag_accepts_enabled_values_only() {
+        assert!(parse_bool_flag("1"));
+        assert!(parse_bool_flag("TRUE"));
+        assert!(parse_bool_flag(" yes "));
+        assert!(parse_bool_flag("on"));
+        assert!(!parse_bool_flag("0"));
+        assert!(!parse_bool_flag("false"));
+        assert!(!parse_bool_flag(""));
+    }
+
+    #[test]
+    fn prune_legacy_sqlite_files_keeps_active_db_and_other_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let active = dir.path().join("atrium-fresh.db");
+        let active_wal = dir.path().join("atrium-fresh.db-wal");
+        let legacy = dir.path().join("atrium.db");
+        let legacy_shm = dir.path().join("atrium.db-shm");
+        let other = dir.path().join("keep.txt");
+
+        std::fs::write(&active, "active").expect("write active");
+        std::fs::write(&active_wal, "active wal").expect("write active wal");
+        std::fs::write(&legacy, "legacy").expect("write legacy");
+        std::fs::write(&legacy_shm, "legacy shm").expect("write legacy shm");
+        std::fs::write(&other, "other").expect("write other");
+
+        let db_url = format!("sqlite://{}", active.to_string_lossy().replace('\\', "/"));
+        prune_legacy_sqlite_files(&db_url).expect("prune");
+
+        assert!(active.exists());
+        assert!(active_wal.exists());
+        assert!(other.exists());
+        assert!(!legacy.exists());
+        assert!(!legacy_shm.exists());
     }
 
     #[test]
@@ -257,6 +382,7 @@ mod tests {
         assert_eq!(cfg.account_internal_secret, None);
         assert_eq!(cfg.super_admin_account_ids, None);
         assert_eq!(cfg.cors_origin, None);
+        assert!(!cfg.prune_legacy_sqlite_on_start);
     }
 
     #[test]
@@ -326,6 +452,7 @@ mod tests {
             discovery_public_jwk: None,
             discovery_key_id: None,
             cors_origin: None,
+            prune_legacy_sqlite_on_start: false,
         };
 
         let err = run(cfg).await.err().expect("invalid listen must fail");
@@ -355,6 +482,7 @@ mod tests {
             discovery_public_jwk: None,
             discovery_key_id: None,
             cors_origin: None,
+            prune_legacy_sqlite_on_start: false,
         };
 
         let timed = tokio::time::timeout(Duration::from_millis(120), run(cfg)).await;
